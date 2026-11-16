@@ -13,6 +13,17 @@ backend/tmp/
 frontend/node_modules/
 frontend/dist/
 
+# Python virtual environments & test cache
+tests/.venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Playwright artifacts
+frontend/playwright-report/
+frontend/test-results/
+
 # OS files
 .DS_Store
 Thumbs.db

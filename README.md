@@ -295,6 +295,158 @@ curl -X DELETE http://localhost:8080/api/v1/tasks/<ID>
 
 ---
 
+## Automated Testing
+
+TaskFlow implements a multi-tier testing strategy following the **Testing Pyramid**:
+
+```
+            / \
+           /   \       E2E Tests (Playwright)
+          / E2E \      Browser interaction & user workflows
+         /-------\
+        /   API   \    API Integration Tests (pytest)
+       /Integration\   HTTP contracts, status codes & DB persistence
+      /-------------\
+     /     Unit      \ Unit Tests (Go testing)
+    /     Testing     \ Business logic, validation, config & middleware
+   /-------------------\
+```
+
+### Understanding Test Types
+
+| Test Level | Scope | Framework | Execution Speed | What it Catches |
+| :--- | :--- | :--- | :--- | :--- |
+| **Unit Testing** | Individual Go functions and handlers | Go `testing`, `httptest` | ~0.01s (Fastest) | Logic flaws, invalid status rejection, faulty defaults, parsing bugs |
+| **API Integration** | Full HTTP request/response cycle against real backend & PostgreSQL | `pytest` + `requests` | ~0.5s (Fast) | SQL errors, DB constraints, HTTP status codes, schema validation |
+| **Browser E2E** | Live UI rendered in headless browser | `Playwright` (Chromium) | ~30s (Comprehensive) | DOM regressions, broken click handlers, form flow, dialog handling |
+
+---
+
+### A. Go Backend Unit Testing
+
+Unit tests run directly in Go without requiring an external database or network connection.
+
+#### Execution Commands:
+
+```bash
+cd backend
+
+# Run all unit tests
+go test ./...
+
+# Run with verbose test logs
+go test -v ./...
+
+# Run with statement coverage report
+go test -cover ./...
+```
+
+**Windows PowerShell:**
+```powershell
+cd backend
+go test -v -cover ./...
+```
+
+---
+
+### B. Python API Integration Testing (pytest)
+
+The API test suite validates all REST endpoints against the live Go backend and PostgreSQL database. It verifies JSON schemas, HTTP status codes, and input validation without polluting existing user data.
+
+#### Prerequisites:
+The Go backend and PostgreSQL **must be running** before executing these tests:
+- PostgreSQL service running
+- Go backend running: `go run ./cmd/api` (port 8080)
+
+#### 1. Create and Activate Virtual Environment:
+
+**Windows (PowerShell):**
+```powershell
+# From project root
+python -m venv tests/.venv
+
+# Activate virtual environment
+.\tests\.venv\Scripts\Activate.ps1
+```
+
+*(If script execution is disabled in PowerShell, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned`)*
+
+**macOS / Linux (Bash):**
+```bash
+# From project root
+python3 -m venv tests/.venv
+
+# Activate virtual environment
+source tests/.venv/bin/activate
+```
+
+#### 2. Install Dependencies:
+```bash
+pip install -r tests/api/requirements.txt
+```
+
+#### 3. Execute API Tests:
+```bash
+# Run entire API test suite
+pytest -c tests/api/pytest.ini tests/api
+
+# Run with extra verbose output
+pytest -c tests/api/pytest.ini tests/api -v
+
+# Run a specific test file
+pytest -c tests/api/pytest.ini tests/api/test_health.py
+pytest -c tests/api/pytest.ini tests/api/test_tasks.py
+```
+
+*Note: You can override the backend URL using the `API_BASE_URL` environment variable (default: `http://localhost:8080`).*
+
+---
+
+### C. Playwright Browser End-to-End Testing
+
+Playwright drives a headless Chromium browser to execute user flows: viewing the dashboard, filling the task creation form, editing tasks, toggling status badges, filtering, and deleting records.
+
+#### Prerequisites:
+- PostgreSQL and the Go backend **must be running** (port 8080).
+- Playwright's `webServer` configuration automatically starts the Vite frontend dev server at `http://localhost:5173`.
+
+#### 1. Install Dependencies & Browser Binaries:
+
+**Windows PowerShell & macOS/Linux:**
+```bash
+cd frontend
+
+# Install dev dependencies (including @playwright/test)
+npm install
+
+# Download Chromium browser binary (one-time setup)
+npx playwright install chromium
+```
+
+#### 2. Execute Browser Tests:
+```bash
+cd frontend
+
+# Run all E2E tests in headless Chromium
+npx playwright test
+
+# Or using the npm script shortcut:
+npm run test:e2e
+```
+
+#### 3. View Reports & Trace Artifacts:
+```bash
+cd frontend
+
+# Open the HTML test report
+npx playwright show-report
+
+# Inspect traces and failure screenshots (if any test fails)
+npx playwright show-trace test-results/<test-folder>/trace.zip
+```
+
+---
+
 ## Project Structure
 
 ```
@@ -302,13 +454,16 @@ taskflow/
 ├── backend/
 │   ├── cmd/api/main.go          # Application startup & graceful shutdown
 │   ├── internal/
-│   │   ├── config/              # Env loading & configuration
+│   │   ├── config/              # Env loading & config_test.go
 │   │   ├── database/            # pgxpool connection pool setup
-│   │   ├── handlers/            # REST controllers & CORS middleware
-│   │   └── tasks/               # Data model & parameterized SQL queries
+│   │   ├── handlers/            # REST controllers, middleware & handlers_test.go
+│   │   └── tasks/               # Data model, parameterized SQL & tasks_test.go
 │   ├── go.mod
+│   ├── go.sum
 │   └── .env.example
 ├── frontend/
+│   ├── e2e/
+│   │   └── taskflow.spec.js     # Playwright E2E browser test suite
 │   ├── src/
 │   │   ├── components/          # Dashboard, TaskForm, TaskCard, TaskList, StatusFilter
 │   │   ├── services/api.js      # Fetch client wrapper
@@ -316,7 +471,16 @@ taskflow/
 │   │   └── main.jsx
 │   ├── package.json
 │   ├── vite.config.js
+│   ├── playwright.config.js     # Playwright test configuration
 │   └── .env.example
+├── tests/
+│   ├── api/
+│   │   ├── conftest.py          # pytest fixtures, APIClient & cleanup logic
+│   │   ├── test_health.py       # Liveness / readiness probe tests
+│   │   ├── test_tasks.py        # Complete task CRUD & validation test suite
+│   │   ├── pytest.ini           # pytest settings & testpaths
+│   │   └── requirements.txt     # Python test dependencies
+│   └── .venv/                   # Python virtual environment (ignored in git)
 ├── database/
 │   └── schema.sql               # PostgreSQL DDL
 ├── .gitignore

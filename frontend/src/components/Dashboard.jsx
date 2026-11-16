@@ -8,24 +8,23 @@ export default function Dashboard({ tasks }) {
   const completed = tasks.filter((t) => t.status === 'completed').length;
 
   return (
-    <div className="dashboard-stats">
-      <div className="stat-card">
+    <div className="dashboard-stats" aria-label="Task statistics">
+      <div className="stat-card" aria-label="Total tasks">
         <div className="stat-value">{total}</div>
         <div className="stat-label">Total Tasks</div>
       </div>
-      <div className="stat-card">
+      <div className="stat-card" aria-label="To do tasks">
         <div className="stat-value" style={{ color: '#1e40af' }}>{todo}</div>
         <div className="stat-label">To Do</div>
       </div>
-      <div className="stat-card">
+      <div className="stat-card" aria-label="In progress tasks">
         <div className="stat-value" style={{ color: '#92400e' }}>{inProgress}</div>
         <div className="stat-label">In Progress</div>
       </div>
-      <div className="stat-card">
+      <div className="stat-card" aria-label="Completed tasks">
         <div className="stat-value" style={{ color: '#065f46' }}>{completed}</div>
         <div className="stat-label">Completed</div>
       </div>
     </div>
   );
 }
-

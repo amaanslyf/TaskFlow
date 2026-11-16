@@ -17,7 +17,7 @@ export default function TaskCard({ task, onEdit, onDelete, onStatusChange }) {
   const [deleting, setDeleting] = useState(false);
 
   const handleDelete = async () => {
-    if (!window.confirm('Delete this task?')) return;
+    if (!window.confirm(`Delete this task?`)) return;
     setDeleting(true);
     try {
       await onDelete(task.id);
@@ -45,8 +45,10 @@ export default function TaskCard({ task, onEdit, onDelete, onStatusChange }) {
     minute: '2-digit',
   });
 
+  const statusText = STATUS_LABELS[task.status] || task.status;
+
   return (
-    <div className="task-card">
+    <div className="task-card" aria-label={`Task: ${task.title}`}>
       <div className="task-card-body">
         <div className="task-card-title">{task.title}</div>
         {task.description && (
@@ -54,24 +56,33 @@ export default function TaskCard({ task, onEdit, onDelete, onStatusChange }) {
         )}
         <div className="task-card-meta">
           <span
+            role="button"
+            tabIndex={0}
             className={`status-badge status-${task.status}`}
             onClick={handleStatusCycle}
+            onKeyDown={(e) => e.key === 'Enter' && handleStatusCycle()}
             title="Click to change status"
+            aria-label={`Status: ${statusText}. Click to change.`}
             style={{ cursor: 'pointer' }}
           >
-            {STATUS_LABELS[task.status] || task.status}
+            {statusText}
           </span>
           <span style={{ marginLeft: '0.75rem' }}>Created {createdDate}</span>
         </div>
       </div>
       <div className="task-card-actions">
-        <button className="btn btn-secondary btn-sm" onClick={() => onEdit(task)}>
+        <button
+          className="btn btn-secondary btn-sm"
+          onClick={() => onEdit(task)}
+          aria-label={`Edit task ${task.title}`}
+        >
           Edit
         </button>
         <button
           className="btn btn-danger btn-sm"
           onClick={handleDelete}
           disabled={deleting}
+          aria-label={`Delete task ${task.title}`}
         >
           {deleting ? '…' : 'Delete'}
         </button>
@@ -79,4 +90,3 @@ export default function TaskCard({ task, onEdit, onDelete, onStatusChange }) {
     </div>
   );
 }
-

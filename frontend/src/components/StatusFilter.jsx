@@ -12,12 +12,13 @@ const FILTERS = [
 
 export default function StatusFilter({ current, onChange }) {
   return (
-    <div className="filter-bar">
+    <div className="filter-bar" role="group" aria-label="Filter tasks by status">
       {FILTERS.map((f) => (
         <button
           key={f.value}
           className={`filter-btn ${current === f.value ? 'active' : ''}`}
           onClick={() => onChange(f.value)}
+          aria-pressed={current === f.value}
         >
           {f.label}
         </button>
@@ -25,4 +26,3 @@ export default function StatusFilter({ current, onChange }) {
     </div>
   );
 }
-
