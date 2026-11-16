@@ -1,0 +1,25 @@
+# ── TaskFlow .gitignore ──────────────────────────────────
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env.*.local
+
+# Go build output
+backend/tmp/
+*.exe
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
