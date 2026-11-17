@@ -56,7 +56,7 @@ jobs:
       - name: Build Vite Production SPA
         working-directory: frontend
         env:
-          VITE_API_BASE_URL: http://localhost:8080
+          VITE_API_BASE_URL: /api
         run: npm run build
 
   # ── Job 3: API Integration Tests (pytest) ─────────────────
@@ -272,7 +272,7 @@ jobs:
           (cd frontend && npx playwright install --with-deps chromium)
 
           # 8. Run Playwright
-          (cd frontend && VITE_API_BASE_URL=http://localhost:8080 FRONTEND_ORIGIN=http://localhost:5173 npx playwright test)
+          (cd frontend && VITE_API_BASE_URL=/api FRONTEND_ORIGIN=http://localhost:5173 npx playwright test)
 
       - name: Print Backend Logs on Failure
         if: failure()
@@ -365,7 +365,7 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           build-args: |
-            VITE_API_BASE_URL=http://localhost:8080
+            VITE_API_BASE_URL=/api
           push: false
           load: true
           tags: ${{ steps.meta-frontend.outputs.tags }}
@@ -489,7 +489,7 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           build-args: |
-            VITE_API_BASE_URL=http://localhost:8080
+            VITE_API_BASE_URL=/api
           push: true
           load: false
           tags: ${{ steps.meta-frontend.outputs.tags }}

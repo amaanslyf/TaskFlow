@@ -65,9 +65,9 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        # Baked into the React bundle at build time.
-        # Must point to host-accessible URL since code runs in client browser!
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+        # Relative API base path proxied through Nginx to http://backend:8080.
+        # Environment-independent: browser accesses http://localhost:3000/api/...
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
     image: taskflow-frontend:dev
     restart: unless-stopped
     ports:

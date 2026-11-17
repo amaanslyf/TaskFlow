@@ -8,16 +8,13 @@
 #   3. In production, we don't need Node.js at all! We use
 #      Nginx, an ultra-fast, lightweight web server written in C.
 #
-# Vite Environment Variables & Docker Networking:
+# Vite Environment Variables & Environment-Independent Bundling:
 #   Vite injects "import.meta.env.VITE_*" variables into the
-#   JavaScript bundle at COMPILE TIME, replacing references with
-#   raw string literals.
-#   Importantly: This code executes inside the END-USER'S BROWSER,
-#   not inside the container. The browser runs on the user's host
-#   machine, which cannot resolve Docker's internal virtual bridge
-#   names like "http://backend:8080". Therefore, VITE_API_BASE_URL
-#   must point to a URL accessible from the client's browser
-#   (default: "http://localhost:8080").
+#   JavaScript bundle at COMPILE TIME. By setting VITE_API_BASE_URL to
+#   the relative path "/api", the compiled React bundle remains completely
+#   agnostic of hostnames, ports, and deployment environments.
+#   All API calls stay same-origin in the browser, and Nginx reverse-proxies
+#   requests matching "/api/" to the Go backend container ("http://backend:8080").
 # ============================================================
 
 # ── Stage 1: Build static assets with Node.js ──────────────
@@ -32,8 +29,8 @@ COPY package.json package-lock.json ./
 # Faster and more deterministic than "npm install" in CI/CD.
 RUN npm ci
 
-# Declare build argument for API URL with default fallback.
-ARG VITE_API_BASE_URL=http://localhost:8080
+# Declare build argument for API URL defaulting to relative '/api'.
+ARG VITE_API_BASE_URL=/api
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 # Copy source code and configuration files.

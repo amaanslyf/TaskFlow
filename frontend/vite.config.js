@@ -7,6 +7,12 @@ export default defineConfig({
   server: {
     port: 5173,       // Default Vite port
     open: true,       // Open the browser automatically
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+    },
   },
 });
 

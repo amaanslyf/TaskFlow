@@ -1351,7 +1351,112 @@ docker image inspect ghcr.io/amaanslyf/taskflow-backend:main --format '{{json .C
 
 ---
 
-> **⚠️ Frontend Runtime Configuration Notice**: The frontend production image is currently built with build argument `VITE_API_BASE_URL=http://localhost:8080`. This configuration is designed for local development and Docker Compose testing where the browser accesses the host machine. In subsequent Kubernetes and Helm deployment stages, we will introduce runtime configuration injection or Nginx reverse-proxy routing so external browser clients can connect to remote cluster endpoints.
+## 🌐 Environment-Independent Frontend Configuration and Nginx Reverse Proxy
+
+TaskFlow’s React frontend container is completely **environment-independent**. The compiled JavaScript bundle contains no hardcoded backend hostnames, IP addresses, or ports.
+
+### 1. The "Localhost in Browser" Problem
+
+In traditional single-page application setups, developers often configure a build-time variable such as:
+```text
+VITE_API_BASE_URL=http://localhost:8080
+```
+While this works when testing on a single local computer, it fails completely in remote or production environments:
+- **Client-Side Execution**: React code executes inside the **end-user's browser**, not inside the container.
+- **Wrong Target**: When a remote user opens the application (e.g. `http://192.168.1.50:3000`), a hardcoded `http://localhost:8080` causes the browser to send API requests to `localhost:8080` on the **user's own device**, where no backend exists!
+- **Container Name Invisibility**: Replacing `localhost` with the container name `http://backend:8080` also fails, because end-user client browsers cannot resolve internal Docker bridge networks.
+
+### 2. The Solution: Relative API Paths and Reverse Proxies
+
+Instead of hardcoding absolute server URLs, TaskFlow uses **relative API paths (`/api`)**:
+
+```
+                                      ┌─────────────────────────────────────────────────────┐
+                                      │                    TaskFlow Stack                   │
+                                      │                                                     │
+[ Client Browser ]                    │    ┌──────────────────┐     ┌──────────────────┐    │
+       │                              │    │ frontend (Nginx) │     │   backend (Go)   │    │
+       │─── GET /                     │───►│ ┌──────────────┐ │     │                  │    │
+       │    (Loads React SPA)         │    │ │ Static HTML  │ │     │                  │    │
+       │                              │    │ └──────────────┘ │     │                  │    │
+       │                              │    │                  │     │                  │    │
+       │─── GET /api/v1/tasks ────────│───►│ location /api/ { │────►│ :8080            │    │
+       │    (Same-Origin Relative URL)│    │   proxy_pass     │     │ /api/v1/tasks    │    │
+       │                              │    │   http://backend │     │                  │    │
+       │                              │    │   :8080;         │     │                  │    │
+       │                              │    │ }                │     │                  │    │
+       │                              │    └──────────────────┘     └──────────────────┘    │
+                                      └─────────────────────────────────────────────────────┘
+```
+
+1. **Same-Origin Relative URLs**: The React bundle requests `/api/v1/tasks`. The browser automatically prepends the origin from which the page was loaded (e.g., `http://localhost:3000` in Compose or `https://taskflow.example.com` in production).
+2. **Reverse Proxying**:
+   - **Production (Docker / Compose)**: Nginx receives requests on port 80. Static requests (`/`, `/assets/*`) are served directly from disk. Requests starting with `/api/` are proxied to `http://backend:8080`.
+   - **Local Development**: Vite dev server (`http://localhost:5173`) proxies `/api` requests to the local Go backend at `http://localhost:8080`.
+
+### 3. Nginx Reverse Proxy Configuration
+
+In `frontend/nginx.conf`, the `/api/` location block forwards requests to the internal Docker Compose service:
+
+```nginx
+location /api/ {
+    proxy_pass http://backend:8080;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+> **Important URI Preservation**: Notice that `proxy_pass http://backend:8080;` has **no trailing slash** after the port. This ensures Nginx passes the full original URI (e.g., `/api/v1/tasks`) intact to Go's `http.ServeMux`.
+
+### 4. Docker Service Discovery
+
+Within Docker Compose, services communicate over a private bridge network:
+- Nginx resolves the hostname `backend` using Docker’s embedded DNS server (`127.0.0.11`).
+- The backend port `8080` does not even need to be published to the host for the frontend to function; Nginx communicates with it over the internal network.
+
+### 5. Vite Development Proxy
+
+During local development with `npm run dev`, Vite runs on `localhost:5173` while Go runs on `localhost:8080`. In `frontend/vite.config.js`:
+
+```javascript
+server: {
+  port: 5173,
+  open: true,
+  proxy: {
+    '/api': {
+      target: 'http://localhost:8080',
+      changeOrigin: true,
+    },
+  },
+}
+```
+The browser sends requests to `http://localhost:5173/api/v1/tasks`, and Vite transparently forwards them to the Go API on port `8080`.
+
+### 6. Verifying Frontend Image Portability
+
+Because the React bundle only contains `/api`, the compiled image (`ghcr.io/amaanslyf/taskflow-frontend`) is truly environment-agnostic:
+
+```powershell
+# 1. Verify that no hostnames are baked into the compiled JavaScript bundle
+Select-String -Path "frontend\dist\assets\index-*.js" -Pattern "localhost:8080", "backend:8080"
+# (Output: Empty — confirms zero hardcoded hostnames)
+
+# 2. Test Nginx reverse proxy through port 3000
+curl.exe -i http://localhost:3000/api/v1/tasks
+# HTTP/1.1 200 OK
+# Content-Type: application/json
+```
+
+### 7. How This Maps to Kubernetes and Ingress
+
+In the upcoming Kubernetes deployment:
+- **Kubernetes Service**: The Go backend will run behind a Kubernetes Service named `taskflow-backend` on port 8080.
+- **Ingress Controller**: A Kubernetes Ingress (or API Gateway) routes path `/` to the frontend Pods and path `/api` to the backend Service.
+- **Zero Frontend Rebuilds**: The exact same container image published to GHCR can be deployed to Kubernetes without rebuilding or re-injecting variables into the bundle!
 
 ---
 

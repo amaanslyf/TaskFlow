@@ -6,16 +6,41 @@
 //   • Components stay focused on rendering.
 //   • Easy to swap with a mock for testing later.
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+// Default to relative '/api' base path so that browser requests stay same-origin
+// and are routed through Nginx (in production) or Vite proxy (in development).
+const rawBase = import.meta.env.VITE_API_BASE_URL;
+const API_BASE = (rawBase !== undefined && rawBase !== '')
+  ? rawBase.replace(/\/+$/, '')
+  : '/api';
+
+/**
+ * Constructs the final request URL while avoiding duplicate `/api` prefixes.
+ *
+ * Examples:
+ *   API_BASE = '/api', path = '/api/v1/tasks'  --> '/api/v1/tasks'
+ *   API_BASE = '/api', path = '/v1/tasks'      --> '/api/v1/tasks'
+ *   API_BASE = 'http://localhost:8080', path = '/api/v1/tasks' --> 'http://localhost:8080/api/v1/tasks'
+ */
+function buildUrl(path) {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+
+  // If API_BASE already ends with '/api' and path begins with '/api/',
+  // deduplicate the '/api' prefix (e.g. '/api' + '/api/v1/tasks' -> '/api/v1/tasks')
+  if (API_BASE.endsWith('/api') && cleanPath.startsWith('/api/')) {
+    return `${API_BASE.slice(0, -4)}${cleanPath}`;
+  }
+
+  return `${API_BASE}${cleanPath}`;
+}
 
 /**
  * Small wrapper around fetch that:
- *   1. Prepends the API base URL.
+ *   1. Prepends the centralized API base URL (relative /api).
  *   2. Sets JSON headers.
  *   3. Throws on non-2xx responses with the server's error message.
  */
 async function request(path, options = {}) {
-  const url = `${API_BASE}${path}`;
+  const url = buildUrl(path);
 
   const config = {
     headers: { 'Content-Type': 'application/json' },
