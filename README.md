@@ -1107,10 +1107,134 @@ docker compose --env-file .env.docker down
 
 ---
 
+## 🔄 Continuous Integration with GitHub Actions
+
+In this milestone, we introduce **Continuous Integration (CI)** using **GitHub Actions**. Every commit pushed to `main` and every Pull Request targeting `main` automatically triggers an end-to-end automated validation pipeline before allowing production Docker images to be built.
+
+```
+                  GitHub Trigger: Push / Pull Request on main
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                           PARALLEL STAGE: AUTOMATED QUALITY GATES                       │
+├─────────────────────┬─────────────────────┬──────────────────────┬──────────────────────┤
+│       go-unit       │   frontend-build    │   api-integration    │     browser-e2e      │
+│  (Go 1.27.4 Runner) │  (Node.js 22 Runner)│  (pytest + PG 17)    │ (Playwright + PG 17) │
+│                     │                     │                      │                      │
+│ • go test -race     │ • npm ci            │ • Service Container  │ • Service Container  │
+│ • go vet            │ • npm run build     │ • Apply schema.sql   │ • Apply schema.sql   │
+│ • Memory safety     │ • Static asset lint │ • Go API in background│ • Go API + Vite dev  │
+│ • Unit coverage     │ • Tree-shaking test │ • 19 pytest cases    │ • 6 Chromium flows   │
+└──────────┬──────────┴──────────┬──────────┴──────────┬───────────┴──────────┬───────────┘
+           │                     │                     │                      │
+           └─────────────────────┴──────────┬──────────┴──────────────────────┘
+                                            │
+                                            ▼ (all 4 jobs must succeed)
+                               ┌─────────────────────────┐
+                               │      docker-build       │
+                               │  (Production Artifacts) │
+                               │                         │
+                               │ • taskflow-backend:ci   │
+                               │ • taskflow-frontend:ci  │
+                               │ • Multi-stage verify    │
+                               └─────────────────────────┘
+```
+
+---
+
+### Core CI Concepts for Beginners
+
+1. **What is Continuous Integration (CI)?**  
+   CI is the automated practice of testing and building application code on every single commit. Instead of discovering bugs during release week or on production servers, defects are caught within 2 minutes of pushing code.
+2. **What is GitHub Actions?**  
+   An event-driven automation platform built directly into GitHub. It automatically triggers workflows in response to repository events like git pushes, pull requests, releases, or cron schedules.
+3. **Workflows, Jobs, and Steps:**  
+   - **Workflow**: The automated process defined in a YAML file (`.github/workflows/ci.yml`).
+   - **Job**: A set of steps that execute on an independent virtual machine (**Runner**). Jobs execute **in parallel** by default unless configured with dependencies.
+   - **Step**: An individual task inside a job (e.g., checking out code, setting up a language, executing a test command).
+4. **What are GitHub-Hosted Runners?**  
+   Clean, ephemeral virtual machines provided by GitHub (e.g., `ubuntu-latest`). Each job gets its own isolated VM that is automatically destroyed when the job completes.
+5. **What are Service Containers?**  
+   Docker containers configured in GitHub Actions to provide supporting services (like PostgreSQL 17) alongside the runner VM. The container runs on a Docker bridge network with ports published to `localhost` on the Ubuntu runner.
+6. **Why Run Jobs in Parallel?**  
+   Running `go-unit`, `frontend-build`, `api-integration`, and `browser-e2e` concurrently slashes pipeline runtime from ~15 minutes down to ~2–3 minutes.
+7. **Quality Gates with `needs`:**  
+   The `docker-build` job uses `needs: [go-unit, frontend-build, api-integration, browser-e2e]`. If even one test fails, GitHub Actions halts the pipeline immediately and will **not** build Docker images from flawed code.
+
+---
+
+### The TaskFlow CI Pipeline Jobs Explained
+
+#### Job 1: `go-unit` (Go Unit Testing & Code Quality)
+- **Role**: Validates Go business logic, validation rules, CORS headers, and configuration loaders in total isolation without requiring PostgreSQL.
+- **Commands**:
+  ```bash
+  go test -v -race -cover ./...
+  go vet ./...
+  ```
+- **Why `-race` Matters**: The Go race detector instruments memory accesses to catch multi-threaded data races that could cause memory corruption in concurrent web servers.
+- **Why `go vet` Matters**: Analyzes Go source code for suspicious constructs, dead code, printf formatting mismatches, and unreachable statements.
+
+#### Job 2: `frontend-build` (Vite SPA Compilation)
+- **Role**: Validates that all JSX components, CSS imports, and dependencies compile into a valid production bundle.
+- **Why `npm ci` instead of `npm install`?**  
+  `npm ci` strictly adheres to `package-lock.json`, bypasses user prompts, deletes existing `node_modules`, and guarantees deterministic dependency trees across every CI build.
+- **Commands**:
+  ```bash
+  npm ci
+  npm run build
+  ```
+
+#### Job 3: `api-integration` (REST API & PostgreSQL Testing)
+- **Role**: Verifies REST endpoints against a live PostgreSQL 17 database using `pytest`.
+- **How It Works**:
+  1. GitHub Actions launches a `postgres:17-alpine` service container on `localhost:5432` with health checks.
+  2. The runner applies `database/schema.sql`.
+  3. The Go backend launches in the background using CI-disposable credentials (`ci_only_password`).
+  4. The job polls `GET http://localhost:8080/healthz` until healthy.
+  5. Pytest executes 19 integration tests validating CRUD operations, UUID parsing, 404 responses, and status constraints.
+  6. Backend logs are automatically printed if tests fail.
+
+#### Job 4: `browser-e2e` (Playwright Chromium End-to-End Testing)
+- **Role**: Simulates actual user interactions in a real headless browser.
+- **How It Works**:
+  1. Boots an independent PostgreSQL 17 service container and applies the schema.
+  2. Starts the Go backend on `localhost:8080`.
+  3. Installs Playwright Chromium with system dependencies: `npx playwright install --with-deps chromium`.
+  4. Playwright's `webServer` launches the Vite development server on `localhost:5173`.
+  5. Chromium tests user flows: creating tasks, editing descriptions, clicking status badges, filtering, and deleting records.
+  6. On failure, Playwright HTML trace reports are automatically uploaded as GitHub Actions artifacts for debugging.
+
+#### Job 5: `docker-build` (Production Multi-Stage Image Builds)
+- **Role**: Verifies that both multi-stage Dockerfiles (`backend/Dockerfile` and `frontend/Dockerfile`) build cleanly in production mode.
+- **Dependency**: Executes only after **all 4 quality gates** pass.
+- **Commands**:
+  ```bash
+  docker build -t taskflow-backend:ci -f backend/Dockerfile backend
+  docker build --build-arg VITE_API_BASE_URL=http://localhost:8080 -t taskflow-frontend:ci -f frontend/Dockerfile frontend
+  docker images taskflow-backend:ci taskflow-frontend:ci
+  ```
+
+---
+
+### How to Inspect and Troubleshoot CI Workflow Runs
+
+1. Navigate to the **Actions** tab in your GitHub repository (`https://github.com/<owner>/TaskFlow/actions`).
+2. Click on the latest commit workflow run to view the interactive DAG pipeline graph.
+3. Click any individual job (e.g. `api-integration` or `browser-e2e`) to inspect live step logs.
+4. **Troubleshooting Tips**:
+   - **Backend Failure**: If the backend fails to connect to PostgreSQL, the workflow automatically runs `cat backend.log` to print Go panic traces or connection errors.
+   - **Playwright Test Failure**: Download the `playwright-report` ZIP artifact at the bottom of the workflow page to view DOM screenshots and failure traces.
+
+---
+
 ## Project Structure
 
 ```
 taskflow/
+├── .github/
+│   └── workflows/
+│       └── ci.yml               # GitHub Actions CI multi-job pipeline
 ├── compose.yaml                 # Declarative Docker Compose orchestration
 ├── .env.docker                  # Local Docker environment configuration
 ├── backups/                     # Database backups (ignored in Git)
