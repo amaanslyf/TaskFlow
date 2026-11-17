@@ -292,10 +292,127 @@ jobs:
             frontend/test-results/
           retention-days: 7
 
-  # ── Job 5: Production Docker Image Build and Publish ───────
-  docker-build:
-    name: Production Docker Image Build and Publish
+  # ── Job 5A: Docker Build & Verification (Pull Request) ────
+  docker-build-pr:
+    name: Docker Build & Verification (Pull Request)
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs:
+      - go-unit
+      - frontend-build
+      - api-integration
+      - browser-e2e
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Normalize Image Repository Namespace
+        id: image-names
+        shell: bash
+        run: |
+          OWNER="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          if [ -z "$OWNER" ]; then
+            echo "ERROR: GITHUB_REPOSITORY_OWNER is empty" >&2
+            exit 1
+          fi
+          BACKEND="ghcr.io/${OWNER}/taskflow-backend"
+          FRONTEND="ghcr.io/${OWNER}/taskflow-frontend"
+          echo "backend=${BACKEND}" >> "$GITHUB_OUTPUT"
+          echo "frontend=${FRONTEND}" >> "$GITHUB_OUTPUT"
+          echo "Normalized Backend Image:  ${BACKEND}"
+          echo "Normalized Frontend Image: ${FRONTEND}"
+
+      - name: Extract Docker Metadata for Backend
+        id: meta-backend
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image-names.outputs.backend }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=long,prefix=sha-
+
+      - name: Extract Docker Metadata for Frontend
+        id: meta-frontend
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image-names.outputs.frontend }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=long,prefix=sha-
+
+      - name: Build and Verify Backend Docker Image
+        id: build-backend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          load: true
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          cache-from: type=gha,scope=taskflow-backend
+          cache-to: type=gha,mode=max,scope=taskflow-backend
+
+      - name: Build and Verify Frontend Docker Image
+        id: build-frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          build-args: |
+            VITE_API_BASE_URL=http://localhost:8080
+          push: false
+          load: true
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha,scope=taskflow-frontend
+          cache-to: type=gha,mode=max,scope=taskflow-frontend
+
+      - name: Report Pull Request Build Summary
+        env:
+          BACKEND_IMAGE: ${{ steps.image-names.outputs.backend }}
+          BACKEND_TAGS: ${{ steps.meta-backend.outputs.tags }}
+          FRONTEND_IMAGE: ${{ steps.image-names.outputs.frontend }}
+          FRONTEND_TAGS: ${{ steps.meta-frontend.outputs.tags }}
+        run: |
+          echo "============================================================"
+          echo "Pull Request Build Verification Summary"
+          echo "============================================================"
+          echo "Backend Image Target:  $BACKEND_IMAGE"
+          echo "Backend Tags:"
+          echo "$BACKEND_TAGS"
+          echo "------------------------------------------------------------"
+          echo "Frontend Image Target: $FRONTEND_IMAGE"
+          echo "Frontend Tags:"
+          echo "$FRONTEND_TAGS"
+          echo "============================================================"
+          echo "Result: Both images compiled and loaded into Buildx cache successfully."
+          echo "Publishing: SKIPPED (pull requests have no packages:write permission)."
+          echo "============================================================"
+
+          {
+            echo "## ℹ️ Pull Request Verification Build"
+            echo ""
+            echo "Both container images were **built and verified** locally via Docker Buildx."
+            echo ""
+            echo "| Component | Target Image | Evaluated Tags | Result |"
+            echo "| :--- | :--- | :--- | :--- |"
+            echo "| **Backend** | \`$BACKEND_IMAGE\` | \`sha-${{ github.sha }}\` | Verified (Not Published) |"
+            echo "| **Frontend** | \`$FRONTEND_IMAGE\` | \`sha-${{ github.sha }}\` | Verified (Not Published) |"
+            echo ""
+            echo "> **Least-Privilege Note**: Pull requests run with \`contents: read\` only and cannot publish to GHCR."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Job 5B: Docker Build & Publish to GHCR (Main) ──────────
+  docker-publish-main:
+    name: Docker Build & Publish to GHCR (Main)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
       - go-unit
       - frontend-build
@@ -309,63 +426,72 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Normalize Image Repository Namespace
+        id: image-names
+        shell: bash
         run: |
-          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "IMAGE_REPOSITORY_BACKEND=ghcr.io/${OWNER}/taskflow-backend" >> "$GITHUB_ENV"
-          echo "IMAGE_REPOSITORY_FRONTEND=ghcr.io/${OWNER}/taskflow-frontend" >> "$GITHUB_ENV"
+          OWNER="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          if [ -z "$OWNER" ]; then
+            echo "ERROR: GITHUB_REPOSITORY_OWNER is empty" >&2
+            exit 1
+          fi
+          BACKEND="ghcr.io/${OWNER}/taskflow-backend"
+          FRONTEND="ghcr.io/${OWNER}/taskflow-frontend"
+          echo "backend=${BACKEND}" >> "$GITHUB_OUTPUT"
+          echo "frontend=${FRONTEND}" >> "$GITHUB_OUTPUT"
+          echo "Normalized Backend Image:  ${BACKEND}"
+          echo "Normalized Frontend Image: ${FRONTEND}"
 
       - name: Extract Docker Metadata for Backend
         id: meta-backend
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
-          images: ${{ env.IMAGE_REPOSITORY_BACKEND }}
+          images: ${{ steps.image-names.outputs.backend }}
           tags: |
             type=ref,event=branch
             type=sha,format=long,prefix=sha-
 
       - name: Extract Docker Metadata for Frontend
         id: meta-frontend
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
-          images: ${{ env.IMAGE_REPOSITORY_FRONTEND }}
+          images: ${{ steps.image-names.outputs.frontend }}
           tags: |
             type=ref,event=branch
             type=sha,format=long,prefix=sha-
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Process Backend Docker Image
+      - name: Build and Publish Backend Docker Image
         id: build-backend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./backend
           file: ./backend/Dockerfile
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          load: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+          push: true
+          load: false
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
           cache-from: type=gha,scope=taskflow-backend
           cache-to: type=gha,mode=max,scope=taskflow-backend
 
-      - name: Build and Process Frontend Docker Image
+      - name: Build and Publish Frontend Docker Image
         id: build-frontend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
           build-args: |
             VITE_API_BASE_URL=http://localhost:8080
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          load: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+          push: true
+          load: false
           tags: ${{ steps.meta-frontend.outputs.tags }}
           labels: ${{ steps.meta-frontend.outputs.labels }}
           cache-from: type=gha,scope=taskflow-frontend
@@ -373,17 +499,16 @@ jobs:
 
       - name: Report Published Image References and Digests
         env:
-          BACKEND_IMAGE: ${{ env.IMAGE_REPOSITORY_BACKEND }}
+          BACKEND_IMAGE: ${{ steps.image-names.outputs.backend }}
           BACKEND_TAGS: ${{ steps.meta-backend.outputs.tags }}
           BACKEND_DIGEST: ${{ steps.build-backend.outputs.digest }}
-          FRONTEND_IMAGE: ${{ env.IMAGE_REPOSITORY_FRONTEND }}
+          FRONTEND_IMAGE: ${{ steps.image-names.outputs.frontend }}
           FRONTEND_TAGS: ${{ steps.meta-frontend.outputs.tags }}
           FRONTEND_DIGEST: ${{ steps.build-frontend.outputs.digest }}
-          IS_PUSH_MAIN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
           echo "============================================================"
-          echo "Docker Build & Publish Execution Summary"
+          echo "GitHub Container Registry (GHCR) Publishing Summary"
           echo "============================================================"
           echo "Backend Image:   $BACKEND_IMAGE"
           echo "Backend Tags:"
@@ -396,31 +521,22 @@ jobs:
           echo "Frontend Digest: $FRONTEND_DIGEST"
           echo "============================================================"
 
-          if [ "$IS_PUSH_MAIN" = "true" ]; then
-            {
-              echo "## 🚀 GitHub Container Registry (GHCR) Publishing Summary"
-              echo ""
-              echo "Successfully published production container images to **GitHub Container Registry (ghcr.io)**."
-              echo ""
-              echo "### 📦 Published Images"
-              echo ""
-              echo "| Component | Repository | Tags | Image Digest |"
-              echo "| :--- | :--- | :--- | :--- |"
-              echo "| **Backend** | \`$BACKEND_IMAGE\` | \`main\`, \`sha-$COMMIT_SHA\` | \`$BACKEND_DIGEST\` |"
-              echo "| **Frontend** | \`$FRONTEND_IMAGE\` | \`main\`, \`sha-$COMMIT_SHA\` | \`$FRONTEND_DIGEST\` |"
-              echo ""
-              echo "### 📥 Pull Commands (PowerShell / Bash)"
-              echo '```powershell'
-              echo "docker pull ${BACKEND_IMAGE}:main"
-              echo "docker pull ${FRONTEND_IMAGE}:main"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            {
-              echo "## ℹ️ Pull Request Verification Build"
-              echo ""
-              echo "Container images were successfully **built and verified** in Docker Buildx."
-              echo "Publishing to GHCR was **skipped** (image publishing triggers only on push to \`main\`)."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            echo "## 🚀 GitHub Container Registry (GHCR) Publishing Summary"
+            echo ""
+            echo "Successfully published production container images to **GitHub Container Registry (ghcr.io)**."
+            echo ""
+            echo "### 📦 Published Images"
+            echo ""
+            echo "| Component | Repository | Tags | Image Digest |"
+            echo "| :--- | :--- | :--- | :--- |"
+            echo "| **Backend** | \`$BACKEND_IMAGE\` | \`main\`, \`sha-$COMMIT_SHA\` | \`$BACKEND_DIGEST\` |"
+            echo "| **Frontend** | \`$FRONTEND_IMAGE\` | \`main\`, \`sha-$COMMIT_SHA\` | \`$FRONTEND_DIGEST\` |"
+            echo ""
+            echo "### 📥 Pull Commands (PowerShell / Bash)"
+            echo '```powershell'
+            echo "docker pull ${BACKEND_IMAGE}:main"
+            echo "docker pull ${FRONTEND_IMAGE}:main"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 

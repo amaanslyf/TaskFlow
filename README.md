@@ -1205,13 +1205,18 @@ In this milestone, we introduce **Continuous Integration (CI)** using **GitHub A
   5. Chromium tests user flows: creating tasks, editing descriptions, clicking status badges, filtering, and deleting records.
   6. On failure, Playwright HTML trace reports are automatically uploaded as GitHub Actions artifacts for debugging.
 
-#### Job 5: `docker-build` (Production Multi-Stage Build & GHCR Publish)
-- **Role**: Builds production Docker images using Docker Buildx and BuildKit, tags them with branch and immutable commit SHA tags, and publishes them to **GitHub Container Registry (GHCR)**.
-- **Dependency**: Executes only after **all 4 quality gates** pass (`go-unit`, `frontend-build`, `api-integration`, `browser-e2e`).
-- **Publishing Gate**:
-  - **Pull Request**: Builds and verifies both Docker images locally via BuildKit (`load: true`, `push: false`). GHCR login and publishing are skipped.
-  - **Push to `main`**: Authenticates to `ghcr.io` with `GITHUB_TOKEN` (`packages: write`) and publishes both images with dual tags (`main` and `sha-<commit>`).
-- **BuildKit Caching**: Uses isolated GitHub Actions cache scopes (`taskflow-backend` and `taskflow-frontend`) for high-speed builds.
+#### Jobs 5A & 5B: Mutually Exclusive Docker Build & Publish Quality Gates
+To maintain strict **least privilege**, the pipeline separates image building into two mutually exclusive jobs:
+
+- **`docker-build-pr` (Pull Request Verification)**:
+  - **Trigger**: `if: github.event_name == 'pull_request'`
+  - **Permissions**: `contents: read` (strictly read-only; no `packages: write`).
+  - **Action**: Builds both images via Docker Buildx and loads them locally (`push: false`, `load: true`) to verify compilation and Dockerfile validity.
+- **`docker-publish-main` (Production GHCR Publishing)**:
+  - **Trigger**: `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`
+  - **Permissions**: `contents: read` and `packages: write`.
+  - **Action**: Authenticates via `GITHUB_TOKEN`, builds both images with BuildKit layer caching, and publishes them with dual tags (`main` and `sha-<commit>`) to `ghcr.io`.
+- **Quality Gate Dependency**: Both jobs declare `needs: [go-unit, frontend-build, api-integration, browser-e2e]`. If any test fails, Docker builds never execute.
 
 ---
 
@@ -1220,7 +1225,7 @@ In this milestone, we introduce **Continuous Integration (CI)** using **GitHub A
 1. Navigate to the **Actions** tab in your GitHub repository (`https://github.com/<owner>/TaskFlow/actions`).
 2. Click on the latest commit workflow run to view the interactive DAG pipeline graph.
 3. Click any individual job (e.g. `api-integration` or `browser-e2e`) to inspect live step logs.
-4. **Workflow Run Summary**: After a successful `main` branch push, inspect the **Job Summary** at the bottom of the `docker-build` page for the published image repositories, tags, and SHA-256 digests.
+4. **Workflow Run Summary**: After a successful `main` branch push, inspect the **Job Summary** at the bottom of the `docker-publish-main` page for the published image repositories, tags, and SHA-256 digests.
 5. **Troubleshooting Tips**:
    - **Backend Failure**: If the backend fails to connect to PostgreSQL or exits unexpectedly, the workflow runs `cat backend.log` to print Go panic traces or database connection errors.
    - **Playwright Test Failure**: Download the `playwright-artifacts` ZIP archive at the bottom of the workflow page to view DOM screenshots, videos, and Playwright HTML traces.
@@ -1236,7 +1241,7 @@ A container registry is a centralized, secure service for storing, versioning, a
 
 **GitHub Container Registry (`ghcr.io`)** is GitHub's native registry built into GitHub Packages. Unlike generic third-party registries, GHCR provides:
 - Seamless integration with GitHub repositories and GitHub Actions.
-- Native authentication using ephemeral, scoped repository tokens.
+- Native authentication using ephemeral, scoped repository tokens (`GITHUB_TOKEN`).
 - Granular package permissions tied directly to repository collaborators and organizations.
 
 ### 2. Published TaskFlow Image Repositories
@@ -1246,33 +1251,37 @@ A container registry is a centralized, secure service for storing, versioning, a
 | **Backend API** | `ghcr.io/amaanslyf/taskflow-backend` | `:main`, `:sha-<full-commit-sha>` |
 | **Frontend SPA** | `ghcr.io/amaanslyf/taskflow-frontend` | `:main`, `:sha-<full-commit-sha>` |
 
-> **Naming Rule**: All container repository paths on GHCR must be strictly lowercase (`ghcr.io/<owner>/<repo>`). The workflow dynamically normalizes the repository owner using `tr '[:upper:]' '[:lower:]'` to ensure OCI specification compliance.
+> **Naming Rule**: All container repository paths on GHCR must be strictly lowercase (`ghcr.io/<owner>/<repo>`). The workflow normalizes the repository owner dynamically using explicit step outputs (`steps.image-names.outputs.backend` and `steps.image-names.outputs.frontend`).
 
-### 3. Image Tagging Strategy: Mutable vs Immutable
+### 3. Image Tagging Strategy: Mutable Tags vs Immutable Digests
 
 TaskFlow implements an automated dual-tagging strategy:
 
 ```
                                   ┌───► :main (Mutable branch pointer)
-ghcr.io/amaanslyf/taskflow-backend ───┤
-                                  └───► :sha-3d205df... (Immutable content pin)
+ghcr.io/amaanslyf/taskflow-backend ───┼───► :sha-e9c5747... (Unique per commit by convention)
+                                  └───► @sha256:7f3b... (Cryptographically immutable digest)
 ```
 
 1. **Mutable Branch Tag (`:main`)**:
    - Updated on every push to `main`.
-   - Ideal for developers who want to pull the latest continuous integration build without looking up commit hashes.
-   - **Risk**: Cannot guarantee repeatability across time, as `:main` points to different code today than it did yesterday.
-2. **Immutable Commit Tag (`:sha-<full-commit-sha>`)**:
-   - Pinned to the exact 40-character Git commit SHA that built the image.
-   - Never overwritten.
-   - **Essential for Production & Kubernetes**: Guarantees deterministic deployments and enables instant rollbacks to any historical build.
-3. **Tags vs Image Digests**:
-   - A **tag** (`:main`) is a human-readable pointer that can be updated.
-   - A **digest** (`sha256:7f3b...`) is the cryptographic SHA-256 content-addressable hash of the image manifest itself. It is mathematically impossible to alter the image contents without changing the digest.
+   - Useful for quick developer local testing to pull the latest build without checking commit hashes.
+   - **Limitation**: Not repeatable over time—`:main` points to different code today than tomorrow.
+2. **Commit SHA Tag (`:sha-<full-commit-sha>`)**:
+   - Pinned to the exact 40-character Git commit SHA that produced the build.
+   - **Important Security Distinction**: A Git SHA tag is unique per commit and immutable *by convention*, but standard container registries do not automatically prevent a publisher with `packages: write` from overwriting a tag.
+3. **Cryptographic Image Digest (`@sha256:<digest>`)**:
+   - The SHA-256 hash of the image manifest itself.
+   - **True Immutability**: Any alteration to a single byte in any layer produces an entirely different digest.
+   - **Kubernetes Production Best Practice**: Production Kubernetes manifests can reference images directly by digest:
+     ```yaml
+     image: ghcr.io/amaanslyf/taskflow-backend@sha256:7f3b25...
+     ```
+     This guarantees tamper-proof, deterministic container execution regardless of any registry tag changes.
 
 ### 4. Docker Buildx and BuildKit Acceleration
 
-The workflow introduces `docker/setup-buildx-action` and `docker/build-push-action`, replacing legacy `docker build` with Moby **BuildKit**:
+The workflow introduces `docker/setup-buildx-action@v4` and `docker/build-push-action@v7`, replacing legacy `docker build` with Moby **BuildKit**:
 - **Parallel Stage Execution**: Non-dependent multi-stage build layers are compiled simultaneously.
 - **GitHub Actions Layer Caching (`type=gha`)**: Unchanged dependency layers (such as Go modules in `go.sum` and NPM packages in `package-lock.json`) are cached in GitHub Actions cache storage.
 - **Isolated Cache Scopes**:
@@ -1280,28 +1289,32 @@ The workflow introduces `docker/setup-buildx-action` and `docker/build-push-acti
   - `taskflow-frontend`: Isolated Node.js and Vite build cache.
   - Separating scopes prevents cache eviction caused by one service overwriting another's cache entries.
 
-### 5. Authentication & Security Model
+### 5. Authentication & Strict Least-Privilege Security Model
 
-Image publishing is authenticated strictly using the built-in **`GITHUB_TOKEN`**:
-- **No Personal Access Tokens in CI**: We do not store long-lived personal access tokens (PATs) or registry passwords in repository secrets.
-- **Least-Privilege Scoping**: Workflow-level permissions remain read-only (`contents: read`). The `packages: write` permission is granted exclusively to the `docker-build` job:
-  ```yaml
-  permissions:
-    contents: read
-    packages: write
-  ```
-- **Conditional Authentication**: `docker/login-action` executes only when publishing is authorized (`github.event_name == 'push' && github.ref == 'refs/heads/main'`). Pull requests never authenticate or publish.
+To prevent privilege escalation, the workflow splits container operations into **two mutually exclusive jobs**:
 
-### 6. Public vs Private Package Visibility
+1. **`docker-build-pr` (Pull Requests)**:
+   - Granted **strictly `contents: read`** permissions.
+   - Pull requests—including same-repository PRs—never receive `packages: write` tokens.
+   - Compiles and validates both Docker images in BuildKit (`load: true`, `push: false`) without authenticating to GHCR.
+2. **`docker-publish-main` (Pushes to `main`)**:
+   - Granted `contents: read` and `packages: write`.
+   - Authenticates using the ephemeral, scoped `GITHUB_TOKEN` (`secrets.GITHUB_TOKEN`).
+   - Pushes both images to GHCR with dual tags (`main` and `sha-<commit>`).
 
-By default, packages published to GHCR inherit the visibility of the parent GitHub repository:
-- **Private Repository**: Published images are private. Pulling requires authentication.
-- **Public Repository**: Published images can be made public via package settings.
+### 6. Package Visibility and Permissions
 
-To manage visibility in GitHub:
-1. Go to your GitHub profile or repository -> **Packages**.
-2. Click **taskflow-backend** or **taskflow-frontend**.
-3. Navigate to **Package settings** -> **Danger Zone** -> **Change package visibility**.
+It is a common misconception that packages automatically share the exact visibility of their source repository. In GHCR:
+- **Permission Inheritance**: Packages inherit access permissions (e.g. read/write rights of repository collaborators and teams).
+- **Visibility Separation**: Package visibility is managed independently from repository visibility.
+- **Default Visibility**: Newly published packages on GHCR **default to private**, even if the source repository is public.
+- **Making a Package Public**: Requires an explicit, intentional manual setting change by a repository admin:
+  1. Navigate to **GitHub Profile / Organization** -> **Packages** (or repository sidebar -> **Packages**).
+  2. Click **taskflow-backend** or **taskflow-frontend**.
+  3. Go to **Package settings** -> **Danger Zone** -> **Change package visibility** -> **Public**.
+- **Public vs. Private Access**:
+  - **Public Packages**: Anyone can run `docker pull ghcr.io/...` anonymously without credentials.
+  - **Private Packages**: Pulling requires an authenticated Docker client with a Personal Access Token (`read:packages` scope) or a Kubernetes `imagePullSecret`.
 
 ### 7. How to Pull and Run Published Images Locally
 
@@ -1322,9 +1335,12 @@ $env:CR_PAT | docker login ghcr.io -u amaanslyf --password-stdin
 docker pull ghcr.io/amaanslyf/taskflow-backend:main
 docker pull ghcr.io/amaanslyf/taskflow-frontend:main
 
-# Pull an exact immutable commit SHA build
+# Pull an exact commit SHA build
 docker pull ghcr.io/amaanslyf/taskflow-backend:sha-<commit-sha>
 docker pull ghcr.io/amaanslyf/taskflow-frontend:sha-<commit-sha>
+
+# Pull by cryptographic digest (true immutability)
+docker pull ghcr.io/amaanslyf/taskflow-backend@sha256:<digest>
 ```
 
 #### Inspect Published Image Metadata
