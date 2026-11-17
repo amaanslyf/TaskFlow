@@ -54,6 +54,10 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # Expose HTTP port 80.
 EXPOSE 80
 
+# Healthcheck: Periodically verify Nginx is actively serving the static React homepage.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
+
 # Start Nginx in the foreground ("daemon off" prevents the container from exiting immediately).
 CMD ["nginx", "-g", "daemon off;"]
 

@@ -997,75 +997,113 @@ volumes:
 
 ### Step-by-Step Operations
 
-#### 1. Validate the Configuration
-```bash
-# Validates syntax and environment variable interpolation
+### Docker Compose Health Checks and Lifecycle Management
+
+#### 1. Service Health Monitoring Architecture
+
+All three services implement native Docker health checks to ensure reliability and automated startup coordination:
+
+| Service | Probe Mechanism | Command | Key Parameters |
+| :--- | :--- | :--- | :--- |
+| **`postgres`** | Database Ping | `pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"` | `interval: 10s`, `timeout: 5s`, `retries: 5`, `start-period: 10s` |
+| **`backend`** | HTTP Probe | `wget -q -O - http://localhost:8080/healthz \|\| exit 1` | `interval: 30s`, `timeout: 5s`, `retries: 3`, `start-period: 5s` |
+| **`frontend`** | Nginx Web Ping | `wget -q -O /dev/null http://127.0.0.1/ \|\| exit 1` | `interval: 30s`, `timeout: 5s`, `retries: 3`, `start-period: 5s` |
+
+##### Understanding Health Check Parameters:
+- **`interval`**: How often Docker runs the check (e.g., `30s` = every 30 seconds).
+- **`timeout`**: Maximum allowed execution time before the probe is marked failed (e.g., `5s` = fails if probe hangs for >5 seconds).
+- **`start-period`**: Initialization grace period. Probes that fail during this initial window do NOT count towards the retry limit, giving slow services time to boot.
+- **`retries`**: Number of consecutive failures needed before the container transitions to `unhealthy`.
+
+##### Expected `docker compose ps` Output:
+```powershell
+docker compose --env-file .env.docker ps
+```
+```
+NAME                  IMAGE                   COMMAND                  SERVICE    STATUS                    PORTS
+taskflow-backend-1    taskflow-backend:dev    "/app/api"               backend    Up (healthy)              0.0.0.0:8080->8080/tcp
+taskflow-frontend-1   taskflow-frontend:dev   "/docker-entrypoint.…"   frontend   Up (healthy)              0.0.0.0:3000->80/tcp
+taskflow-postgres-1   postgres:17-alpine      "docker-entrypoint.s…"   postgres   Up (healthy)              0.0.0.0:5433->5432/tcp
+```
+
+---
+
+#### 2. Health-Based Dependency Ordering (`depends_on: condition: service_healthy`)
+
+```
+┌─────────────────────────┐
+│   postgres container    │
+│  (runs pg_isready loop) │
+└───────────┬─────────────┘
+            │ becomes healthy
+            ▼
+┌─────────────────────────┐
+│    backend container    │
+│ (connects & starts API) │
+│   (evaluates /healthz)  │
+└───────────┬─────────────┘
+            │ becomes healthy
+            ▼
+┌─────────────────────────┐
+│   frontend container    │
+│ (starts serving Nginx)  │
+└─────────────────────────┘
+```
+
+- **Why a running PostgreSQL container is not necessarily ready**: A container transition from "created" to "running" only means the Linux kernel started PID 1. PostgreSQL might still be replaying write-ahead logs (WAL), allocating buffer pools, or binding sockets. If the Go backend tries to connect immediately, connection refused errors crash the backend.
+- **Why `condition: service_healthy` is essential**: Traditional short-form `depends_on: [postgres]` only waits for the postgres container process to start. `condition: service_healthy` halts dependent container launches until the upstream health probe actually returns exit code `0`.
+- **What happens on initial failure**: If PostgreSQL fails its health checks during startup, Compose cancels the startup pipeline and does NOT launch `backend` or `frontend`.
+- **Critical Limitation — Startup Only, Not Continuous Healing**:  
+  `depends_on` is strictly a **startup-order coordinator**. If PostgreSQL crashes or becomes `unhealthy` 2 hours later, Docker Compose will **NOT** automatically restart or stop the backend. Continuous self-healing, automatic restarts, and traffic shedding are responsibilities of production orchestrators like Kubernetes.
+
+---
+
+#### 3. Deep-Dive: Lifecycle Commands Compared
+
+| Command | Action on Containers | Action on Images | Action on Network/Volumes | When to Use in TaskFlow |
+| :--- | :--- | :--- | :--- | :--- |
+| **`docker compose start`** | Starts *existing, stopped* containers. | Does NOT build or pull. | Uses existing network and volumes. | Fast wake-up when containers were paused via `docker compose stop` and no configuration or code has changed. |
+| **`docker compose up -d`** | Creates missing containers; recreates containers whose configuration or image changed; reuses unchanged containers. | Pulls or builds if missing. | Creates project network if missing; attaches volumes. | **Primary daily command**: Declaratively ensures desired state matches `compose.yaml`. |
+| **`docker compose up --build -d`** | Forces recompilation and rebuild of images before starting or recreating containers. | Rebuilds `taskflow-backend:dev` and `taskflow-frontend:dev`. | Reuses existing volumes and networks. | Use whenever you modify frontend React code or Go backend source code. |
+| **`docker compose stop`** | Sends `SIGTERM` (then `SIGKILL`) to halt processes. Containers enter `Exited (0)`. | None. | Containers, networks, and volumes remain completely preserved. | Use when pausing work to save laptop CPU/RAM without deleting container state. |
+| **`docker compose down`** | Stops and deletes service containers and removes project network `taskflow_default`. | None. | **Preserves external named volumes** (`taskflow-postgres-data`). | Clean teardown at the end of the day. |
+
+> ⚠️ **DANGER — Never run `docker compose down -v`:**  
+> The `-v` flag instructs Compose to delete all attached volumes. While `external: true` protects `taskflow-postgres-data` from default teardown, avoiding `-v` is an essential DevOps best practice to prevent accidental production data loss.
+
+---
+
+#### 4. Practical Workflow Commands (Windows PowerShell)
+
+```powershell
+# 1. Validate configuration without starting
 docker compose --env-file .env.docker config --quiet
-```
 
-#### 2. Build and Start the Full Stack (Detached Mode)
-```bash
+# 2. Build and launch all services in background
 docker compose --env-file .env.docker up --build -d
-```
-Compose will:
-1. Build `taskflow-backend:dev` and `taskflow-frontend:dev` if changes are detected.
-2. Create project network `taskflow_default`.
-3. Launch `taskflow-postgres-1` and wait until `healthy`.
-4. Launch `taskflow-backend-1` and wait until `healthy`.
-5. Launch `taskflow-frontend-1`.
 
-#### 3. Inspect Running Services
-```bash
-# List containers, health status, and published ports
+# 3. Check health and status of all services
 docker compose --env-file .env.docker ps
 
-# List container images, architectures, and sizes
-docker compose --env-file .env.docker images
-```
+# 4. Rebuild and update ONLY the frontend service
+docker compose --env-file .env.docker up --build -d --no-deps frontend
 
-#### 4. Stream and Inspect Logs
-```bash
-# View combined logs from all services
-docker compose --env-file .env.docker logs
-
-# Follow backend logs in real time
+# 5. Follow live logs of a specific service
 docker compose --env-file .env.docker logs -f backend
-
-# Follow database logs in real time
 docker compose --env-file .env.docker logs -f postgres
-```
 
-#### 5. Execute Commands in Running Services
-```bash
-# Open an interactive shell inside the backend container
-docker compose --env-file .env.docker exec backend sh
+# 6. Execute SQL queries directly in the database container
+docker compose --env-file .env.docker exec postgres psql -U postgres -d taskflow -c "\d tasks"
 
-# Run psql inside the postgres container
-docker compose --env-file .env.docker exec postgres psql -U postgres -d taskflow
-```
-
-#### 6. Restart a Specific Service
-```bash
-# Restart only the backend container (e.g. after config changes)
-docker compose --env-file .env.docker restart backend
-```
-
-#### 7. Stop and Start Services (Preserves Containers)
-```bash
-# Stop all services without removing containers
+# 7. Pause the stack (saves battery/RAM without deleting containers)
 docker compose --env-file .env.docker stop
 
-# Start previously stopped services
+# 8. Resume paused stack
 docker compose --env-file .env.docker start
-```
 
-#### 8. Safely Tear Down the Stack (Preserves Persistent Data)
-```bash
-# Stops and removes containers and networks; leaves external volume completely intact
+# 9. Clean teardown (preserves database volume)
 docker compose --env-file .env.docker down
 ```
-
-> ⚠️ **Warning**: Never run `docker compose down -v` if using non-external volumes, as the `-v` flag deletes attached volumes. Because `postgres_data` is marked `external: true`, Docker Compose protects it from deletion even during teardown.
 
 ---
 
