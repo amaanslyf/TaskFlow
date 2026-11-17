@@ -1,0 +1,31 @@
+# ── TaskFlow Frontend .dockerignore ────────────────────────
+# Excludes unnecessary files and secrets from the Docker
+# build context, keeping image builds fast and secure.
+
+# Version control
+.git
+.gitignore
+
+# Dependencies and previous local build artifacts
+node_modules/
+dist/
+
+# Secrets and environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# End-to-end test suites and test reports
+e2e/
+playwright-report/
+test-results/
+.pytest_cache/
+
+# Documentation and editor configurations
+README.md
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+

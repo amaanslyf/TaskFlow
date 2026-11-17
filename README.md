@@ -447,6 +447,104 @@ npx playwright show-trace test-results/<test-folder>/trace.zip
 
 ---
 
+## Docker & Containerization Fundamentals
+
+In this phase, we package the backend and frontend into self-contained, immutable **Docker images**.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Docker Image Architecture                       │
+├──────────────────────────────────┬─────────────────────────────────────┤
+│      taskflow-backend:dev        │        taskflow-frontend:dev        │
+│          (~10.8 MB)              │             (~21.1 MB)              │
+├──────────────────────────────────┼─────────────────────────────────────┤
+│ ┌──────────────────────────────┐ │ ┌─────────────────────────────────┐ │
+│ │ Stage 1: Build (Go compiler) │ │ │ Stage 1: Build (Node.js & Vite) │ │
+│ │ Compiles static Linux binary │ │ │ Compiles JSX to static HTML/CSS │ │
+│ └──────────────┬───────────────┘ │ └───────────────┬─────────────────┘ │
+│                │ [binary only]   │                 │ [dist/ only]      │
+│ ┌──────────────▼───────────────┐ │ ┌───────────────▼─────────────────┐ │
+│ │ Stage 2: Runtime (Alpine)    │ │ │ Stage 2: Runtime (Nginx Alpine) │ │
+│ │ Non-root appuser, port 8080  │ │ │ High-speed static server, p. 80 │ │
+│ └──────────────────────────────┘ │ └─────────────────────────────────┘ │
+└──────────────────────────────────┴─────────────────────────────────────┘
+```
+
+### Core Concepts Explained for Beginners
+
+1. **What is Docker?**  
+   Docker is a containerization platform that packages an application and all of its dependencies (system libraries, settings, runtime) together into a standard unit called an **image**. It guarantees that the application runs identically on your laptop, a teammate's computer, a CI/CD server, or a cloud Kubernetes cluster.
+2. **Image vs. Container**:  
+   - An **Image** is a read-only blueprint/template (similar to a class in OOP or an ISO installer).
+   - A **Container** is a running instance of an image (similar to an object instance or a running process).
+3. **What is a Dockerfile?**  
+   A plain text file containing sequential instructions (`FROM`, `COPY`, `RUN`, `EXPOSE`, `CMD`) that Docker executes to assemble an image.
+4. **What are Docker Layers?**  
+   Each instruction in a Dockerfile creates a read-only filesystem layer. Docker caches layers: if a layer and its inputs haven't changed, Docker reuses the cached layer, dramatically speeding up subsequent builds.
+5. **What is a Multi-Stage Build?**  
+   A multi-stage build uses multiple `FROM` instructions in a single Dockerfile.
+   - Heavy compilation tools (Go compiler ~800MB, Node.js ~1.1GB) are used in temporary **builder** stages.
+   - The final **runtime** stage copies *only* the compiled artifacts (`api` executable or `dist/` HTML/JS files) into a featherweight base image (Alpine Linux ~7MB or Nginx Alpine ~20MB).
+   - **Result**: Drastically smaller images (10-20MB instead of 1GB), faster deployments, and a substantially smaller attack surface (no shell scripts, package managers, or compilers in production).
+6. **Why Nginx instead of Node.js for Production Frontend?**  
+   Node.js is only needed at build-time to compile JSX and bundle assets. The output is purely static files. Nginx uses ~10MB RAM, handles thousands of concurrent requests, and optimizes gzip compression and client-side caching far better than a Node runtime.
+7. **Why .dockerignore is Critical**:  
+   Similar to `.gitignore`, `.dockerignore` prevents files like `.git`, `node_modules`, local test artifacts, and sensitive `.env` files from being sent to the Docker daemon. This keeps the build context small, accelerates builds, and prevents credentials from being baked into image layers.
+
+---
+
+### Building the Docker Images
+
+#### 1. Build the Backend Image:
+
+**Windows PowerShell:**
+```powershell
+docker build -t taskflow-backend:dev -f backend/Dockerfile backend
+```
+
+**macOS / Linux:**
+```bash
+docker build -t taskflow-backend:dev -f backend/Dockerfile backend
+```
+
+#### 2. Build the Frontend Image:
+
+The frontend requires the API base URL to be injected at build time via a Docker build argument:
+
+**Windows PowerShell:**
+```powershell
+docker build --build-arg VITE_API_BASE_URL=http://localhost:8080 -t taskflow-frontend:dev -f frontend/Dockerfile frontend
+```
+
+**macOS / Linux:**
+```bash
+docker build --build-arg VITE_API_BASE_URL=http://localhost:8080 -t taskflow-frontend:dev -f frontend/Dockerfile frontend
+```
+
+---
+
+### Inspecting Docker Images
+
+To view image sizes and layer history:
+
+```bash
+# List local images and verify size
+docker images taskflow-backend:dev
+docker images taskflow-frontend:dev
+
+# Inspect the layer-by-layer build history of the backend
+docker history taskflow-backend:dev
+
+# Inspect the layer-by-layer build history of the frontend
+docker history taskflow-frontend:dev
+
+# Inspect the image metadata (entrypoint, healthcheck, exposed ports, non-root user)
+docker image inspect taskflow-backend:dev
+docker image inspect taskflow-frontend:dev
+```
+
+---
+
 ## Project Structure
 
 ```
@@ -458,6 +556,8 @@ taskflow/
 │   │   ├── database/            # pgxpool connection pool setup
 │   │   ├── handlers/            # REST controllers, middleware & handlers_test.go
 │   │   └── tasks/               # Data model, parameterized SQL & tasks_test.go
+│   ├── Dockerfile               # Multi-stage build: Go compiler -> Alpine runtime
+│   ├── .dockerignore            # Excludes secrets, binaries, and test caches
 │   ├── go.mod
 │   ├── go.sum
 │   └── .env.example
@@ -469,6 +569,9 @@ taskflow/
 │   │   ├── services/api.js      # Fetch client wrapper
 │   │   ├── App.jsx              # Root component & state management
 │   │   └── main.jsx
+│   ├── Dockerfile               # Multi-stage build: Node.js builder -> Nginx Alpine
+│   ├── .dockerignore            # Excludes node_modules, dist, and test artifacts
+│   ├── nginx.conf               # Nginx SPA fallback routing configuration
 │   ├── package.json
 │   ├── vite.config.js
 │   ├── playwright.config.js     # Playwright test configuration

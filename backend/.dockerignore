@@ -1,0 +1,33 @@
+# ── TaskFlow Backend .dockerignore ─────────────────────────
+# Prevents unnecessary or sensitive files from being sent to
+# the Docker daemon during build context creation.
+
+# Version control
+.git
+.gitignore
+
+# Secrets and environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Local compiled binaries and temporary directories
+*.exe
+api
+tmp/
+
+# Test artifacts and caches
+*_test.go
+.pytest_cache/
+__pycache__/
+
+# Documentation and root metadata
+README.md
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
