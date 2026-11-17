@@ -55,6 +55,8 @@ jobs:
 
       - name: Build Vite Production SPA
         working-directory: frontend
+        env:
+          VITE_API_BASE_URL: http://localhost:8080
         run: npm run build
 
   # ── Job 3: API Integration Tests (pytest) ─────────────────
@@ -98,37 +100,69 @@ jobs:
       - name: Apply Database Schema
         run: PGPASSWORD=ci_only_password psql -h localhost -U postgres -d taskflow -f database/schema.sql
 
-      - name: Start Go Backend in Background
+      - name: Start Backend and Run API Integration Tests
         run: |
-          cd backend
+          set -euo pipefail
+
+          # 1. Build the Go executable into $RUNNER_TEMP
+          echo "Building Go backend executable..."
+          (cd backend && go build -o "$RUNNER_TEMP/taskflow-api" ./cmd/api)
+
+          # 2. Launch that executable in the background
+          echo "Starting Go backend in background..."
           DATABASE_URL="postgres://postgres:ci_only_password@localhost:5432/taskflow?sslmode=disable" \
           PORT=8080 \
           FRONTEND_ORIGIN="http://localhost:5173" \
-          go run ./cmd/api > ../backend.log 2>&1 &
-          cd ..
+          "$RUNNER_TEMP/taskflow-api" > backend.log 2>&1 &
+          BACKEND_PID=$!
 
-      - name: Wait for Go Backend Healthcheck
-        run: |
+          # 3 & 4. Register shell EXIT trap for cleanup and failure logging
+          cleanup() {
+            exit_code=$?
+            if [ "$exit_code" -ne 0 ]; then
+              echo "=== Process failed (exit code: $exit_code). Printing backend.log ==="
+              if [ -f backend.log ]; then
+                cat backend.log
+              fi
+            fi
+            if [ -n "${BACKEND_PID:-}" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
+              echo "Stopping Go backend (PID: $BACKEND_PID)..."
+              kill "$BACKEND_PID" 2>/dev/null || true
+              wait "$BACKEND_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          # 5. Wait for /healthz to return HTTP 200
+          echo "Waiting for Go backend /healthz..."
+          ready=false
           for i in {1..30}; do
-            if curl -s -f http://localhost:8080/healthz; then
-              echo "Backend is ready!"
-              exit 0
+            if curl -s -f http://localhost:8080/healthz >/dev/null 2>&1; then
+              echo "Backend is ready on http://localhost:8080/healthz!"
+              ready=true
+              break
+            fi
+            if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+              echo "ERROR: Backend process exited prematurely!"
+              exit 1
             fi
             echo "Waiting for backend ($i/30)..."
             sleep 1
           done
-          echo "ERROR: Backend failed to start!"
-          cat backend.log
-          exit 1
 
-      - name: Install Python API Test Dependencies
-        run: pip install -r tests/api/requirements.txt
+          if [ "$ready" != "true" ]; then
+            echo "ERROR: Backend failed to become healthy within 30 seconds."
+            exit 1
+          fi
 
-      - name: Run Pytest API Integration Suite
-        run: API_BASE_URL=http://localhost:8080 python -m pytest -c tests/api/pytest.ini tests/api -v
+          # 6. Install pytest dependencies
+          pip install -r tests/api/requirements.txt
+
+          # 7. Run pytest
+          API_BASE_URL=http://localhost:8080 python -m pytest -c tests/api/pytest.ini tests/api -v
 
       - name: Print Backend Logs on Failure
-        if: always()
+        if: failure()
         run: |
           if [ -f backend.log ]; then
             echo "=== Go Backend Logs ==="
@@ -176,58 +210,86 @@ jobs:
       - name: Apply Database Schema
         run: PGPASSWORD=ci_only_password psql -h localhost -U postgres -d taskflow -f database/schema.sql
 
-      - name: Start Go Backend in Background
+      - name: Start Backend and Run Playwright Browser Tests
         run: |
-          cd backend
+          set -euo pipefail
+
+          # 1. Build the Go executable into $RUNNER_TEMP
+          echo "Building Go backend executable..."
+          (cd backend && go build -o "$RUNNER_TEMP/taskflow-api" ./cmd/api)
+
+          # 2. Launch that executable in the background
+          echo "Starting Go backend in background..."
           DATABASE_URL="postgres://postgres:ci_only_password@localhost:5432/taskflow?sslmode=disable" \
           PORT=8080 \
           FRONTEND_ORIGIN="http://localhost:5173" \
-          go run ./cmd/api > ../backend.log 2>&1 &
-          cd ..
+          "$RUNNER_TEMP/taskflow-api" > backend.log 2>&1 &
+          BACKEND_PID=$!
 
-      - name: Wait for Go Backend Healthcheck
-        run: |
+          # 3 & 4. Register shell EXIT trap for cleanup and failure logging
+          cleanup() {
+            exit_code=$?
+            if [ "$exit_code" -ne 0 ]; then
+              echo "=== Process failed (exit code: $exit_code). Printing backend.log ==="
+              if [ -f backend.log ]; then
+                cat backend.log
+              fi
+            fi
+            if [ -n "${BACKEND_PID:-}" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
+              echo "Stopping Go backend (PID: $BACKEND_PID)..."
+              kill "$BACKEND_PID" 2>/dev/null || true
+              wait "$BACKEND_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          # 5. Wait for /healthz to return HTTP 200
+          echo "Waiting for Go backend /healthz..."
+          ready=false
           for i in {1..30}; do
-            if curl -s -f http://localhost:8080/healthz; then
-              echo "Backend is ready!"
-              exit 0
+            if curl -s -f http://localhost:8080/healthz >/dev/null 2>&1; then
+              echo "Backend is ready on http://localhost:8080/healthz!"
+              ready=true
+              break
+            fi
+            if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+              echo "ERROR: Backend process exited prematurely!"
+              exit 1
             fi
             echo "Waiting for backend ($i/30)..."
             sleep 1
           done
-          echo "ERROR: Backend failed to start!"
-          cat backend.log
-          exit 1
 
-      - name: Install Frontend Dependencies
-        working-directory: frontend
-        run: npm ci
+          if [ "$ready" != "true" ]; then
+            echo "ERROR: Backend failed to become healthy within 30 seconds."
+            exit 1
+          fi
 
-      - name: Install Playwright Chromium & System Dependencies
-        working-directory: frontend
-        run: npx playwright install --with-deps chromium
+          # 6. Install npm dependencies
+          (cd frontend && npm ci)
 
-      - name: Run Playwright Browser Tests
-        working-directory: frontend
-        env:
-          VITE_API_BASE_URL: http://localhost:8080
-          FRONTEND_ORIGIN: http://localhost:5173
-        run: npx playwright test
+          # 7. Install Playwright Chromium & system dependencies
+          (cd frontend && npx playwright install --with-deps chromium)
+
+          # 8. Run Playwright
+          (cd frontend && VITE_API_BASE_URL=http://localhost:8080 FRONTEND_ORIGIN=http://localhost:5173 npx playwright test)
 
       - name: Print Backend Logs on Failure
-        if: always()
+        if: failure()
         run: |
           if [ -f backend.log ]; then
             echo "=== Go Backend Logs ==="
             cat backend.log
           fi
 
-      - name: Upload Playwright Test Report on Failure
+      - name: Upload Playwright Artifacts on Failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
-          path: frontend/playwright-report/
+          name: playwright-artifacts
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
           retention-days: 7
 
   # ── Job 5: Production Docker Image Build ───────────────────
@@ -250,7 +312,5 @@ jobs:
         run: docker build --build-arg VITE_API_BASE_URL=http://localhost:8080 -t taskflow-frontend:ci -f frontend/Dockerfile frontend
 
       - name: Verify Built Images Exist
-        run: |
-          docker images taskflow-backend:ci
-          docker images taskflow-frontend:ci
+        run: docker image inspect taskflow-backend:ci taskflow-frontend:ci
 
