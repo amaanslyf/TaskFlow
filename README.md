@@ -545,10 +545,538 @@ docker image inspect taskflow-frontend:dev
 
 ---
 
+## 🐳 Running TaskFlow with Manual Docker Commands
+
+In this milestone, we run the entire TaskFlow multi-container stack (**React frontend + Go backend + PostgreSQL database**) using individual `docker` commands. We deliberately avoid Docker Compose here to master the underlying primitives: networks, named volumes, port mappings, environment injection, container lifecycles, and internal DNS resolution.
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 HOST MACHINE (Windows / macOS / Linux)                  │
+│                                                                                        │
+│   Browser (Host)                API Client / Tests (Host)        psql / Admin Tool     │
+│   http://localhost:3000         http://localhost:8080            localhost:5433        │
+└─────────┬───────────────────────────────┬───────────────────────────────┬──────────────┘
+          │                               │                               │
+   Port   │ Host: 3000                    │ Host: 8080                    │ Host: 5433
+  Mapping │ Cont: 80                      │ Cont: 8080                    │ Cont: 5432
+          ▼                               ▼                               ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                  Docker User-Defined Bridge Network: taskflow-net                      │
+│                                                                                        │
+│  ┌───────────────────────┐   HTTP REST   ┌───────────────────────┐   pgx SQL   ┌─────┴─────────────────┐
+│  │   taskflow-frontend   │ ────────────▸ │   taskflow-backend    │ ──────────▸ │      taskflow-db      │
+│  │ (taskflow-frontend:dev│ (via browser  │ (taskflow-backend:dev)│ taskflow-db:│  (postgres:17-alpine) │
+│  │   Nginx on port 80)   │  host port)   │   Go API on port 8080 │    5432     │  Postgres on port 5432│
+│  └───────────────────────┘               └───────────────────────┘             └──────────┬────────────┘
+│                                                                                           │
+└───────────────────────────────────────────────────────────────────────────────────────────┼────┘
+                                                                                            │
+                                                       Persistent Named Docker Volume:      │
+                                                       taskflow-postgres-data ──────────────┘
+                                                       (/var/lib/postgresql/data)
+```
+
+---
+
+### Step-by-Step Manual Orchestration
+
+#### Step 1: Create the User-Defined Bridge Network
+
+Containers attached to the default bridge network cannot resolve each other by container name. Creating a **user-defined bridge network** activates Docker's internal DNS server, allowing `taskflow-backend` to reach PostgreSQL simply by referring to the hostname `taskflow-db`.
+
+```bash
+docker network create taskflow-net
+```
+
+*Verify network creation:*
+```bash
+docker network ls --filter name=taskflow-net
+```
+
+---
+
+#### Step 2: Create the Persistent Named Volume
+
+Containers are ephemeral: when a container is removed, its writable layer is destroyed. A **named volume** exists independently on the host storage and preserves PostgreSQL database files across container stops, restarts, and deletions.
+
+```bash
+docker volume create taskflow-postgres-data
+```
+
+*Verify volume creation:*
+```bash
+docker volume ls --filter name=taskflow-postgres-data
+```
+
+---
+
+#### Step 3: Configure Environment Variables (`.env.docker`)
+
+Create a root-level configuration file named `.env.docker` containing disposable local credentials:
+
+```env
+POSTGRES_DB=taskflow
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=taskflow_local_dev_only
+DATABASE_URL=postgres://postgres:taskflow_local_dev_only@taskflow-db:5432/taskflow?sslmode=disable
+PORT=8080
+FRONTEND_ORIGIN=http://localhost:3000
+```
+
+> **Security Note:** `.env.docker` is excluded from version control via `.gitignore` and is excluded from Docker images via `.dockerignore`.
+
+---
+
+#### Step 4: Run the PostgreSQL Container
+
+Run the official PostgreSQL 17 Alpine image in detached mode (`-d`), attached to `taskflow-net`, with the persistent volume mounted.
+
+> **Port Conflict Note:** If your host machine already runs PostgreSQL locally on port `5432`, map host port `5433` to container port `5432` (`-p 5433:5432`). Inside `taskflow-net`, the container still listens on standard port `5432`.
+
+**Windows PowerShell & macOS/Linux:**
+```bash
+docker run -d \
+  --name taskflow-db \
+  --network taskflow-net \
+  -p 5433:5432 \
+  -e POSTGRES_DB=taskflow \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=taskflow_local_dev_only \
+  -v taskflow-postgres-data:/var/lib/postgresql/data \
+  --restart unless-stopped \
+  postgres:17-alpine
+```
+
+*Verify database readiness:*
+```bash
+docker exec taskflow-db pg_isready -U postgres
+```
+
+---
+
+#### Step 5: Apply the Initial Database Schema
+
+Apply `database/schema.sql` into the newly created database container:
+
+**Windows PowerShell:**
+```powershell
+Get-Content database/schema.sql | docker exec -i taskflow-db psql -U postgres -d taskflow
+```
+
+**macOS / Linux (Bash):**
+```bash
+docker exec -i taskflow-db psql -U postgres -d taskflow < database/schema.sql
+```
+
+*Verify the `tasks` table and indexes exist:*
+```bash
+docker exec taskflow-db psql -U postgres -d taskflow -c "\d tasks"
+```
+
+---
+
+#### Step 6: Run the Go Backend Container
+
+Start the Go API container using our multi-stage image `taskflow-backend:dev`. Inject runtime configuration via `--env-file .env.docker`.
+
+**Windows PowerShell & macOS/Linux:**
+```bash
+docker run -d \
+  --name taskflow-backend \
+  --network taskflow-net \
+  -p 8080:8080 \
+  --env-file .env.docker \
+  --restart unless-stopped \
+  taskflow-backend:dev
+```
+
+*Verify health and readiness probes:*
+```bash
+# Check Docker container status and built-in HEALTHCHECK
+docker ps --filter name=taskflow-backend
+
+# Test HTTP probes from host
+curl http://localhost:8080/healthz
+curl http://localhost:8080/readyz
+```
+
+---
+
+#### Step 7: Run the React Frontend Container
+
+Start the Nginx static frontend container using `taskflow-frontend:dev`. Map host port `3000` to Nginx container port `80`.
+
+**Windows PowerShell & macOS/Linux:**
+```bash
+docker run -d \
+  --name taskflow-frontend \
+  --network taskflow-net \
+  -p 3000:80 \
+  --restart unless-stopped \
+  taskflow-frontend:dev
+```
+
+Open **http://localhost:3000** in your browser to interact with the full-stack application!
+
+---
+
+### Inspecting and Monitoring Containers
+
+#### Check Container Status
+```bash
+# Show running containers with port mappings
+docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+
+# Show all containers including stopped ones
+docker ps -a
+```
+
+#### Inspect Live Logs
+```bash
+# Follow Go backend logs
+docker logs -f taskflow-backend
+
+# Follow PostgreSQL logs
+docker logs -f taskflow-db
+
+# Follow Nginx frontend access logs
+docker logs -f taskflow-frontend
+
+# Inspect the last 50 lines of logs
+docker logs --tail 50 taskflow-backend
+```
+
+#### Monitor Resource Utilization
+```bash
+# Snapshot of CPU, memory, and network I/O per container
+docker stats --no-stream
+```
+
+#### Inspect Network and DNS Members
+```bash
+# View all containers attached to taskflow-net and their internal IP addresses
+docker network inspect taskflow-net
+```
+
+#### Inspect Persistent Volume
+```bash
+# View volume mountpoint and host storage path
+docker volume inspect taskflow-postgres-data
+```
+
+---
+
+### Verifying End-to-End Application Health
+
+#### 1. REST API Integration Test (from Host)
+
+**Windows PowerShell:**
+```powershell
+# Create a task
+$task = Invoke-RestMethod -Uri "http://localhost:8080/api/v1/tasks" -Method Post -Body '{"title":"Dockerized Task","description":"Running inside Docker","status":"todo"}' -ContentType "application/json"
+$taskId = $task.id
+
+# Verify task exists in PostgreSQL container via SQL
+docker exec taskflow-db psql -U postgres -d taskflow -c "SELECT id, title, status FROM tasks WHERE id = '$taskId';"
+
+# Update task status to in_progress
+Invoke-RestMethod -Uri "http://localhost:8080/api/v1/tasks/$taskId" -Method Put -Body '{"status":"in_progress"}' -ContentType "application/json"
+
+# Delete task
+Invoke-RestMethod -Uri "http://localhost:8080/api/v1/tasks/$taskId" -Method Delete
+```
+
+**macOS / Linux (`curl`):**
+```bash
+# Create a task
+curl -X POST http://localhost:8080/api/v1/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Dockerized Task","description":"Running inside Docker","status":"todo"}'
+
+# Verify list of tasks
+curl http://localhost:8080/api/v1/tasks
+```
+
+#### 2. Run Automated Pytest Suite Against Containers
+```bash
+pytest -c tests/api/pytest.ini tests/api -v
+```
+
+#### 3. Run Automated Playwright E2E Tests Against Containers
+```bash
+cd frontend
+npx playwright test
+```
+
+---
+
+### Verifying Data Persistence
+
+To prove that database records persist when containers are stopped or removed:
+
+```bash
+# 1. Insert a test record via psql into taskflow-db
+docker exec taskflow-db psql -U postgres -d taskflow -c "INSERT INTO tasks (title, status) VALUES ('Persistence Test Task', 'in_progress');"
+
+# 2. Stop and restart the PostgreSQL container
+docker stop taskflow-db
+docker start taskflow-db
+
+# 3. Query the database to verify the record survived
+docker exec taskflow-db psql -U postgres -d taskflow -c "SELECT title, status FROM tasks WHERE title = 'Persistence Test Task';"
+```
+
+---
+
+### Container Lifecycle & Teardown Commands
+
+#### Stop Running Containers
+```bash
+docker stop taskflow-frontend taskflow-backend taskflow-db
+```
+
+#### Restart Stopped Containers
+```bash
+docker start taskflow-db taskflow-backend taskflow-frontend
+```
+
+#### Remove Containers (Preserving Data Volume)
+```bash
+# Stop and remove containers
+docker stop taskflow-frontend taskflow-backend taskflow-db
+docker rm taskflow-frontend taskflow-backend taskflow-db
+```
+*Note: Your tasks remain completely safe inside `taskflow-postgres-data`.*
+
+#### Full Cleanup (Destructive: Removes Containers, Network, and Volume)
+```bash
+# Stop and remove containers
+docker rm -f taskflow-frontend taskflow-backend taskflow-db
+
+# Remove user-defined network
+docker network rm taskflow-net
+
+# Remove persistent volume (WARNING: All database records will be permanently deleted)
+docker volume rm taskflow-postgres-data
+```
+
+---
+
+### Deep-Dive: Core Docker Concepts for Beginners
+
+| Concept | Explanation | TaskFlow Example |
+| :--- | :--- | :--- |
+| **Image vs. Container** | An **Image** is a read-only, immutable template containing code, libraries, and runtime files. A **Container** is a running, isolated OS process executing that image with a thin writable layer. | `taskflow-backend:dev` is the image (~10.8 MB); `taskflow-backend` is the running container process (~5.8 MB RAM). |
+| **Container ID vs. Name** | A **Container ID** is a unique 64-character SHA256 hash (e.g. `030c97a1025f`). A **Container Name** is a human-readable alias assigned via `--name` (e.g. `taskflow-backend`). Both reference the container in CLI commands. | You can run `docker logs 030c97a1025f` or `docker logs taskflow-backend` interchangeably. |
+| **Docker Daemon vs. CLI** | The **Docker CLI** (`docker`) is a client terminal tool that sends REST API commands to the background **Docker Daemon** (`dockerd` / Docker Desktop Engine), which actually manages containers, storage, and virtual networks. | Typing `docker run ...` in PowerShell communicates via a Windows named pipe (`\\.\pipe\docker_engine`) to the Docker daemon. |
+| **Port Mapping (`-p host:cont`)** | Containers run inside isolated virtual network namespaces. `-p <host_port>:<container_port>` instructs Docker to configure Linux `iptables` / Windows NAT forwarding so incoming traffic on the host port is routed into the container's listening port. | `-p 5433:5432` forwards host requests on port `5433` into PostgreSQL listening on port `5432`. |
+| **User-Defined Bridge Network** | A private virtual software switch created on the host. Containers on the same bridge network can communicate over any port without publishing those ports to the host machine. | `taskflow-net` connects the backend and database securely. |
+| **Docker Internal DNS** | User-defined networks feature an embedded DNS server at `127.0.0.11`. Docker automatically registers container names as hostnames. Containers resolve peer IP addresses dynamically without hardcoded IPs. | Go backend connects to `taskflow-db:5432`. Docker DNS resolves `taskflow-db` to `172.18.0.2`. |
+| **`localhost` Inside a Container** | Inside a container, `localhost` (127.0.0.1) refers strictly to **that container's own network namespace**, NOT the host computer and NOT other containers. | If `taskflow-backend` tries to connect to `localhost:5432`, it fails because PostgreSQL is running in a different container. It must connect to `taskflow-db:5432`. |
+| **Named Volumes vs. Writable Layer** | A container's writable layer is deleted when the container is removed. A **Named Volume** is a Docker-managed directory on the host filesystem that bypasses the container storage driver and persists indefinitely until explicitly deleted via `docker volume rm`. | `taskflow-postgres-data` stores `/var/lib/postgresql/data`. Even if `taskflow-db` is deleted and recreated, database tables and records remain intact. |
+| **Runtime vs. Build-Time Variables** | Build-time variables (`--build-arg` in `docker build`) bake values directly into static frontend assets (e.g., Vite compiling `VITE_API_BASE_URL` into JavaScript bundles). Runtime variables (`-e` or `--env-file` in `docker run`) inject dynamic values into backend processes at container startup. | `VITE_API_BASE_URL` is baked into frontend HTML/JS during `docker build`. `DATABASE_URL` is injected into the Go backend process at container startup via `--env-file .env.docker`. |
+| **Docker Container Health Status** | Docker checks container health via `HEALTHCHECK`. Status progresses from `starting` to `healthy` (probe exits 0) or `unhealthy` (probe fails consecutive retries). | `taskflow-backend` runs `wget -q -O - http://localhost:8080/healthz` every 15s. `docker ps` displays `Up (healthy)`. |
+| **Docker HEALTHCHECK vs. Kubernetes Probes** | Docker's `HEALTHCHECK` informs local container engines whether a single container is healthy. Kubernetes ignores Dockerfile healthchecks and instead uses declarative **Liveness** (restarts dead pods) and **Readiness** (routes ingress traffic only when ready) probes configured in Pod YAML manifests. | Our `/healthz` and `/readyz` endpoints serve both Docker's local `HEALTHCHECK` and future Kubernetes probes. |
+
+---
+
+---
+
+## 🐙 Multi-Container Orchestration with Docker Compose
+
+In this milestone, we graduate from manual `docker run` commands to **declarative infrastructure-as-code** using modern **Docker Compose** (`compose.yaml`).
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                              DOCKER COMPOSE TOPOLOGY                                    │
+│                                                                                        │
+│   Browser (Host)                API Client / Tests (Host)        psql / Admin Tool     │
+│   http://localhost:3000         http://localhost:8080            localhost:5433        │
+└─────────┬───────────────────────────────┬───────────────────────────────┬──────────────┘
+          │                               │                               │
+   Port   │ Host: 3000                    │ Host: 8080                    │ Host: 5433
+  Mapping │ Cont: 80                      │ Cont: 8080                    │ Cont: 5432
+          ▼                               ▼                               ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                 Compose Default Bridge Network: taskflow_default                       │
+│                                                                                        │
+│  ┌───────────────────────┐   HTTP REST   ┌───────────────────────┐   pgx SQL   ┌─────┴─────────────────┐
+│  │       frontend        │ ────────────▸ │        backend        │ ──────────▸ │       postgres        │
+│  │ (taskflow-frontend:dev│ (via browser  │ (taskflow-backend:dev)│  postgres:  │  (postgres:17-alpine) │
+│  │   Nginx on port 80)   │  host port)   │   Go API on port 8080 │    5432     │  Postgres on port 5432│
+│  └──────────┬────────────┘               └──────────┬────────────┘             └──────────┬────────────┘
+│             │                                       │                                     │
+│             │ depends_on (service_healthy)          │ depends_on (service_healthy)        │
+│             └───────────────────────────────────────┴─────────────────────────────────────┘
+└───────────────────────────────────────────────────────────────────────────────────────────┼────┘
+                                                                                            │
+                                                       Persistent External Named Volume:    │
+                                                       taskflow-postgres-data ──────────────┘
+                                                       (/var/lib/postgresql/data)
+```
+
+---
+
+### Core Concepts Explained for Beginners
+
+1. **What is Docker Compose?**  
+   Docker Compose is a declarative tool for defining and running multi-container Docker applications. Instead of running 10 different shell commands with complex arguments, you describe your entire system in a single YAML file (`compose.yaml`) and start everything with `docker compose up`.
+2. **What is a Compose Service?**  
+   A service is a computing component of your application (e.g. `postgres`, `backend`, `frontend`). Compose builds or pulls the image, creates an isolated container for each service, and automatically wires up networking and volumes.
+3. **Automatic Network & Service Discovery:**  
+   Compose automatically creates an isolated bridge network for the project (`taskflow_default`). Each service is automatically reachable by its **service name** (e.g., `postgres` is resolvable as a hostname at port `5432`). You never need to hardcode IP addresses.
+4. **Orderly Startup with `depends_on` and `condition: service_healthy`:**  
+   Applications have startup dependencies. The backend cannot work without PostgreSQL, and the frontend needs the backend. With `condition: service_healthy`, Compose does not merely wait for a container process to spawn—it waits for PostgreSQL's health check (`pg_isready`) to succeed before launching the backend, and waits for the backend's `/healthz` probe before launching the frontend.
+5. **Preserving External Named Volumes:**  
+   By marking `postgres_data` with `external: true` and pointing it to `taskflow-postgres-data`, Compose mounts our existing volume without creating a new prefixed volume or resetting the database. `docker compose down` will destroy the containers and network, but will **never delete the external volume**.
+6. **PostgreSQL Initialization Semantics:**  
+   Mounting `./database/schema.sql` into `/docker-entrypoint-initdb.d/001-schema.sql` ensures that if the database volume is ever completely fresh, PostgreSQL automatically initializes the tables. If an existing database already exists in the volume, PostgreSQL logs `PostgreSQL Database directory appears to contain a database; Skipping initialization` and leaves your existing data completely untouched!
+
+---
+
+### Compose Configuration File (`compose.yaml`)
+
+```yaml
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: taskflow-backend:dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      PORT: ${PORT}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+    image: taskflow-frontend:dev
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+    external: true
+    name: taskflow-postgres-data
+```
+
+---
+
+### Step-by-Step Operations
+
+#### 1. Validate the Configuration
+```bash
+# Validates syntax and environment variable interpolation
+docker compose --env-file .env.docker config --quiet
+```
+
+#### 2. Build and Start the Full Stack (Detached Mode)
+```bash
+docker compose --env-file .env.docker up --build -d
+```
+Compose will:
+1. Build `taskflow-backend:dev` and `taskflow-frontend:dev` if changes are detected.
+2. Create project network `taskflow_default`.
+3. Launch `taskflow-postgres-1` and wait until `healthy`.
+4. Launch `taskflow-backend-1` and wait until `healthy`.
+5. Launch `taskflow-frontend-1`.
+
+#### 3. Inspect Running Services
+```bash
+# List containers, health status, and published ports
+docker compose --env-file .env.docker ps
+
+# List container images, architectures, and sizes
+docker compose --env-file .env.docker images
+```
+
+#### 4. Stream and Inspect Logs
+```bash
+# View combined logs from all services
+docker compose --env-file .env.docker logs
+
+# Follow backend logs in real time
+docker compose --env-file .env.docker logs -f backend
+
+# Follow database logs in real time
+docker compose --env-file .env.docker logs -f postgres
+```
+
+#### 5. Execute Commands in Running Services
+```bash
+# Open an interactive shell inside the backend container
+docker compose --env-file .env.docker exec backend sh
+
+# Run psql inside the postgres container
+docker compose --env-file .env.docker exec postgres psql -U postgres -d taskflow
+```
+
+#### 6. Restart a Specific Service
+```bash
+# Restart only the backend container (e.g. after config changes)
+docker compose --env-file .env.docker restart backend
+```
+
+#### 7. Stop and Start Services (Preserves Containers)
+```bash
+# Stop all services without removing containers
+docker compose --env-file .env.docker stop
+
+# Start previously stopped services
+docker compose --env-file .env.docker start
+```
+
+#### 8. Safely Tear Down the Stack (Preserves Persistent Data)
+```bash
+# Stops and removes containers and networks; leaves external volume completely intact
+docker compose --env-file .env.docker down
+```
+
+> ⚠️ **Warning**: Never run `docker compose down -v` if using non-external volumes, as the `-v` flag deletes attached volumes. Because `postgres_data` is marked `external: true`, Docker Compose protects it from deletion even during teardown.
+
+---
+
 ## Project Structure
 
 ```
 taskflow/
+├── compose.yaml                 # Declarative Docker Compose orchestration
+├── .env.docker                  # Local Docker environment configuration
+├── backups/                     # Database backups (ignored in Git)
+│   └── taskflow_backup_*.sql
 ├── backend/
 │   ├── cmd/api/main.go          # Application startup & graceful shutdown
 │   ├── internal/
@@ -556,7 +1084,7 @@ taskflow/
 │   │   ├── database/            # pgxpool connection pool setup
 │   │   ├── handlers/            # REST controllers, middleware & handlers_test.go
 │   │   └── tasks/               # Data model, parameterized SQL & tasks_test.go
-│   ├── Dockerfile               # Multi-stage build: Go compiler -> Alpine runtime
+│   ├── Dockerfile               # Multi-stage: Go 1.27.4 Alpine -> Alpine 3.21 Runner
 │   ├── .dockerignore            # Excludes secrets, binaries, and test caches
 │   ├── go.mod
 │   ├── go.sum
@@ -569,7 +1097,7 @@ taskflow/
 │   │   ├── services/api.js      # Fetch client wrapper
 │   │   ├── App.jsx              # Root component & state management
 │   │   └── main.jsx
-│   ├── Dockerfile               # Multi-stage build: Node.js builder -> Nginx Alpine
+│   ├── Dockerfile               # Multi-stage: Node.js 22 builder -> Nginx 1.27 Alpine
 │   ├── .dockerignore            # Excludes node_modules, dist, and test artifacts
 │   ├── nginx.conf               # Nginx SPA fallback routing configuration
 │   ├── package.json

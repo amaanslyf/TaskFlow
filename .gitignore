@@ -4,6 +4,9 @@
 .env
 .env.local
 .env.*.local
+.env.docker
+.env.*
+!.env.example
 
 # Go build output
 backend/tmp/
@@ -23,6 +26,10 @@ __pycache__/
 # Playwright artifacts
 frontend/playwright-report/
 frontend/test-results/
+
+# Database backups
+backups/
+*.sql.bak
 
 # OS files
 .DS_Store

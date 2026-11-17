@@ -12,7 +12,7 @@
 # ============================================================
 
 # ── Stage 1: Build the Go binary ────────────────────────────
-FROM golang:1.22-alpine AS builder
+FROM golang:1.27.4-alpine3.24 AS builder
 
 # Set the working directory inside the builder container.
 WORKDIR /build

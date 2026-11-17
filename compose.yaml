@@ -1,0 +1,87 @@
+# ============================================================
+# TaskFlow — Declarative Docker Compose Specification
+# ============================================================
+# This file orchestrates the full TaskFlow application stack:
+#   1. postgres : PostgreSQL 17 database with persistent data volume
+#   2. backend  : Go REST API service (compiled from ./backend)
+#   3. frontend : React SPA served via Nginx (compiled from ./frontend)
+#
+# Communication Topology:
+#   • Docker Compose creates an isolated project bridge network.
+#   • Services resolve each other by service name via embedded DNS
+#     (e.g., backend connects to database at 'postgres:5432').
+#   • External clients (browsers, tests) access the published ports
+#     on localhost (frontend: 3000, backend: 8080, postgres: 5433).
+# ============================================================
+
+services:
+  # ── PostgreSQL Database Service ───────────────────────────
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      # Host port 5433 mapped to container port 5432
+      # (Avoids conflict with native PostgreSQL on host port 5432)
+      - "5433:5432"
+    volumes:
+      # Mount existing persistent named volume for data storage
+      - postgres_data:/var/lib/postgresql/data
+      # Mount initial schema for first-time database provisioning only.
+      # Note: PostgreSQL's initdb executes files in /docker-entrypoint-initdb.d/
+      # ONLY when the data directory is completely empty. Existing databases
+      # are never overwritten or reinitialized by this mount.
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── Go REST API Backend Service ───────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: taskflow-backend:dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      PORT: ${PORT}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── React / Nginx Frontend Service ────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Baked into the React bundle at build time.
+        # Must point to host-accessible URL since code runs in client browser!
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+    image: taskflow-frontend:dev
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+# ── Named Volumes ───────────────────────────────────────────
+volumes:
+  # Reference existing persistent named volume created during manual stage.
+  # "external: true" prevents Compose from creating a new prefixed volume
+  # (e.g. taskflow_postgres_data) and protects it from accidental destruction.
+  postgres_data:
+    external: true
+    name: taskflow-postgres-data
+

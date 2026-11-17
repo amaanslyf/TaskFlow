@@ -43,8 +43,8 @@ export default defineConfig({
     },
   ],
 
-  /* Run local dev server before starting the tests */
-  webServer: {
+  /* Run local dev server before starting the tests (only if not targeting Docker or external URL) */
+  webServer: process.env.PLAYWRIGHT_BASE_URL ? undefined : {
     command: 'npm run dev',
     url: 'http://localhost:5173',
     reuseExistingServer: !process.env.CI,
