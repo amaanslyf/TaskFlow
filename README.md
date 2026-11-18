@@ -1522,7 +1522,14 @@ taskflow/
 │   ├── backend-service.yaml     # Go REST API ClusterIP Service
 │   ├── frontend-deployment.yaml # React + Nginx Deployment
 │   ├── frontend-service.yaml    # Frontend ClusterIP Service
-│   └── kustomization.yaml       # Kustomize declarative bundle
+│   ├── kustomization.yaml       # Kustomize declarative bundle
+│   └── gateway/                 # Kubernetes Gateway API & Traefik manifests
+│       ├── README.md            # Comprehensive Gateway API & Traefik guide
+│       ├── traefik-values.yaml  # Pinned Traefik Helm values
+│       ├── gatewayclass.yaml    # Traefik GatewayClass
+│       ├── gateway.yaml         # TaskFlow Gateway (HTTP port 80)
+│       ├── httproute.yaml       # HTTPRoute routing / to frontend:80
+│       └── kustomization.yaml   # Gateway Kustomize bundle
 ├── .gitignore
 └── README.md
 ```

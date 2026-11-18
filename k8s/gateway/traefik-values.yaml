@@ -1,0 +1,78 @@
+# ============================================================
+# Traefik Helm Values — Gateway API Configuration for TaskFlow
+# ============================================================
+# Chart: traefik/traefik (pinned version: 42.4.1)
+# App Version: v3.7.19
+# Target Namespace: traefik-system
+# ============================================================
+
+# Enable the Kubernetes Gateway API Provider
+providers:
+  kubernetesGateway:
+    enabled: true
+  kubernetesIngress:
+    enabled: false
+  kubernetesCRD:
+    enabled: false
+
+# Disable chart-generated default Gateway & GatewayClass
+# We declare our own declarative GatewayClass and Gateway manifests
+gatewayClass:
+  enabled: false
+gateway:
+  enabled: false
+
+# Disable legacy IngressClass (modern Gateway API only)
+ingressClass:
+  enabled: false
+
+# RBAC configuration for Gateway API
+rbac:
+  enabled: true
+  namespaced: false
+
+# Configure ports: listen on port 80 for HTTP traffic
+ports:
+  web:
+    port: 80
+    expose:
+      default: true
+    exposedPort: 80
+    protocol: TCP
+
+# Configure Service as ClusterIP for local development
+service:
+  enabled: true
+  single: true
+  spec:
+    type: ClusterIP
+
+# Local Kind development resource sizing
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 300m
+    memory: 256Mi
+
+# Security context: permit non-root binding to port 80
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+    add:
+      - NET_BIND_SERVICE
+  readOnlyRootFilesystem: true
+
+podSecurityContext:
+  runAsGroup: 65532
+  runAsNonRoot: true
+  runAsUser: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# Single replica for local lab environment
+deployment:
+  replicas: 1

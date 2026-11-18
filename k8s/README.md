@@ -77,6 +77,7 @@ TaskFlow on Kubernetes consists of three interconnected components running in th
 | `frontend-deployment.yaml` | `Deployment` | Runs Nginx + React UI with GHCR image and health checks. |
 | `frontend-service.yaml` | `Service` | Exposes Frontend UI internally on ClusterIP port 80. |
 | `kustomization.yaml` | `Kustomization` | Bundles all resources for declarative, ordered deployment. |
+| `gateway/` | Directory | Kubernetes Gateway API and Traefik Proxy configuration (see [gateway/README.md](gateway/README.md)). |
 
 ---
 
