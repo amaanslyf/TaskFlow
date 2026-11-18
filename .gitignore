@@ -8,6 +8,10 @@
 .env.*
 !.env.example
 
+# Kubernetes secrets
+k8s/secret.yaml
+!k8s/secret.example.yaml
+
 # Go build output
 backend/tmp/
 *.exe

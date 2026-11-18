@@ -1508,6 +1508,21 @@ taskflow/
 │   └── .venv/                   # Python virtual environment (ignored in git)
 ├── database/
 │   └── schema.sql               # PostgreSQL DDL
+├── k8s/                         # Kubernetes deployment manifests
+│   ├── README.md                # Detailed Kubernetes deployment & testing guide
+│   ├── namespace.yaml           # taskflow-lab namespace
+│   ├── configmap.yaml           # Non-sensitive runtime configuration
+│   ├── postgres-init-configmap.yaml # Schema initialization script
+│   ├── secret.example.yaml      # Secret template (tracked in Git)
+│   ├── secret.yaml              # Local secret with dev credentials (gitignored)
+│   ├── postgres-pvc.yaml        # PersistentVolumeClaim (1Gi RWO)
+│   ├── postgres-deployment.yaml # PostgreSQL 17 Deployment
+│   ├── postgres-service.yaml    # PostgreSQL ClusterIP Service
+│   ├── backend-deployment.yaml  # Go REST API Deployment
+│   ├── backend-service.yaml     # Go REST API ClusterIP Service
+│   ├── frontend-deployment.yaml # React + Nginx Deployment
+│   ├── frontend-service.yaml    # Frontend ClusterIP Service
+│   └── kustomization.yaml       # Kustomize declarative bundle
 ├── .gitignore
 └── README.md
 ```

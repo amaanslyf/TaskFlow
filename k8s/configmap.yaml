@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: taskflow-config
+  namespace: taskflow-lab
+  labels:
+    app.kubernetes.io/name: taskflow-config
+    app.kubernetes.io/part-of: taskflow
+    app.kubernetes.io/managed-by: kubectl
+data:
+  # HTTP port the Go backend listens on
+  PORT: "8080"
+  # Allowed CORS origin for backend API requests
+  FRONTEND_ORIGIN: "http://localhost:3000"
+  # Database connection host, port, and default database name (non-sensitive)
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "taskflow"
