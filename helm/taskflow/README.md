@@ -271,15 +271,22 @@ helm install taskflow .\helm\taskflow `
 
 If TaskFlow is already running in your cluster (deployed via standalone manifests / Kustomize) and you want Helm to take over management of all resources **without downtime and without deleting or recreating the PostgreSQL PVC**:
 
-The live namespace contains 10 application resources rendered by the chart:
-- Deployments: `frontend`, `backend`, `postgres`
-- Services: `frontend`, `backend`, `postgres`
-- ConfigMaps: `taskflow-config`, `taskflow-postgres-init`
-- PersistentVolumeClaim: `taskflow-postgres-pvc`
-- Gateway: `taskflow-gateway`
-- HTTPRoute: `taskflow-frontend-route`
+The live namespace contains exactly **11** application resources rendered by the chart:
+- Deployments (3): `frontend`, `backend`, `postgres`
+- Services (3): `frontend`, `backend`, `postgres`
+- ConfigMaps (2): `taskflow-config`, `taskflow-postgres-init`
+- PersistentVolumeClaim (1): `taskflow-postgres-pvc`
+- Gateway API (2): `taskflow-gateway` (Gateway), `taskflow-frontend-route` (HTTPRoute)
 
 *(Note: Secret `taskflow-secrets` and cluster GatewayClass `traefik-gateway-class` remain externally managed).*
+
+#### Pre-Migration Safety Rules:
+1. **Unchanged Pod Templates Avoid Rollout**:
+   Kubernetes triggers a Pod restart whenever a Deployment's `spec.template` changes. The TaskFlow Helm templates preserve the exact Pod template labels (`app.kubernetes.io/name`, `app.kubernetes.io/component`, `app.kubernetes.io/part-of`), container specs, environment variables, mounts, and probes so that adopting the Deployment does **not** trigger a restart of PostgreSQL or backend pods.
+2. **Review `kubectl diff`**:
+   Before adoption, run `kubectl diff` to confirm that the only differences between the live cluster and rendered templates are management metadata (`metadata.labels` and `metadata.annotations`).
+3. **PV Protection**:
+   Ensure the PersistentVolume backing `taskflow-postgres-pvc` has its reclaim policy set to `Retain` (patched from `Delete`), ensuring physical storage files remain intact even if a claim is detached.
 
 #### Recommended Method: Helm v4 Native Adoption (`--take-ownership`)
 
@@ -297,10 +304,13 @@ helm upgrade --install taskflow .\helm\taskflow `
   --dry-run=server
 
 # Step 3: Execute the live adoption
+# Note: --force-conflicts is required by Kubernetes Server-Side Apply to reassign
+# field ownership of metadata labels from 'kubectl-client-side-apply' to 'Helm'.
 helm upgrade --install taskflow .\helm\taskflow `
   --namespace taskflow-lab `
   --values .\helm\taskflow\environments\development.yaml `
-  --take-ownership
+  --take-ownership `
+  --force-conflicts
 ```
 
 #### Alternative Method: Explicit Manifest Annotation
@@ -308,7 +318,7 @@ helm upgrade --install taskflow .\helm\taskflow `
 If adopting resources explicitly or in environments requiring pre-approved change scripts:
 
 ```powershell
-# Annotate and label all 10 resources for release 'taskflow' in namespace 'taskflow-lab':
+# Annotate and label all 11 resources for release 'taskflow' in namespace 'taskflow-lab':
 $resources = @(
   "deployment/frontend", "deployment/backend", "deployment/postgres",
   "service/frontend", "service/backend", "service/postgres",
@@ -385,5 +395,11 @@ kubectl describe httproute taskflow-frontend-route -n taskflow-lab
 ```powershell
 # Send request to Traefik Gateway Port 80
 curl -i http://localhost/healthz
+
+# Task API endpoints:
+# 1. Collection (list tasks / create task)
 curl -i http://localhost/api/v1/tasks
+
+# 2. Item by ID (get / update / delete task)
+curl -i http://localhost/api/v1/tasks/<task-uuid>
 ```

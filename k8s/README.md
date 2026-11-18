@@ -1,5 +1,18 @@
 # TaskFlow — Kubernetes Deployment Guide
 
+> [!IMPORTANT]
+> **Migration Notice**: As of our latest DevOps milestone, **Helm is now the authoritative management tool** for the live TaskFlow application resources in `taskflow-lab`.
+> - Active Helm Chart: Located under [helm/taskflow/](file:///c:/Users/ad51291/OneDrive%20-%20SAS/Desktop/TaskFLow/helm/taskflow).
+> - **DO NOT USE `kubectl apply -k k8s/`** on the live cluster: Running Kustomize directly will override Helm release ownership metadata (`app.kubernetes.io/managed-by: Helm`) and cause Server-Side Apply field conflicts.
+> - **Educational Reference**: The manifests in this directory (`k8s/`) are preserved as educational reference material and architecture documentation.
+> - **External Resources**:
+>   - Secret `taskflow-secrets` remains externally managed.
+>   - Traefik Proxy remains a separately managed Helm release in namespace `traefik-system`.
+>   - GatewayClass `traefik-gateway-class` is cluster-scoped.
+> - **PostgreSQL Storage Protection & Backups**:
+>   - PV Reclaim Policy: Configured as `Retain`.
+>   - Active Database Backups: Timestamped dumps stored under [backups/](file:///c:/Users/ad51291/OneDrive%20-%20SAS/Desktop/TaskFLow/backups), e.g. `backups/taskflow_k8s_20261118_201010.dump`.
+
 This directory contains the production-grade Kubernetes manifests for deploying the complete TaskFlow 3-tier application stack to a Kubernetes cluster (including local environments like Docker Desktop or Kind).
 
 ---
