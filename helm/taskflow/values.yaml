@@ -1,0 +1,160 @@
+# ============================================================
+# TaskFlow Helm Chart — Default Values
+# ============================================================
+# This values file is non-sensitive and safe to commit.
+# Real credentials are read from an existing Kubernetes Secret.
+# ============================================================
+
+# Overrides for generated resource naming
+nameOverride: ""
+fullnameOverride: ""
+
+# Secret configuration: reference an existing Kubernetes Secret.
+# Do NOT store real credentials in this file.
+secret:
+  existingSecret: "taskflow-secrets"
+  keys:
+    databaseUrl: "DATABASE_URL"
+    postgresUser: "POSTGRES_USER"
+    postgresPassword: "POSTGRES_PASSWORD"
+    postgresDb: "POSTGRES_DB"
+
+# ── Frontend Configuration ──────────────────────────────────
+frontend:
+  replicaCount: 1
+  image:
+    repository: "ghcr.io/amaanslyf/taskflow-frontend"
+    tag: "sha-a94e79db752719a8b06dee5998e70f747addfbf4"
+    pullPolicy: "IfNotPresent"
+  service:
+    name: "frontend"
+    type: "ClusterIP"
+    port: 80
+    targetPort: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 150m
+      memory: 64Mi
+  probes:
+    liveness:
+      path: "/"
+      port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+    readiness:
+      path: "/"
+      port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+
+# ── Backend Configuration ───────────────────────────────────
+backend:
+  replicaCount: 1
+  image:
+    repository: "ghcr.io/amaanslyf/taskflow-backend"
+    tag: "sha-a94e79db752719a8b06dee5998e70f747addfbf4"
+    pullPolicy: "IfNotPresent"
+  service:
+    name: "backend"
+    type: "ClusterIP"
+    port: 8080
+    targetPort: 8080
+  config:
+    port: "8080"
+    frontendOrigin: "http://localhost:3000"
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    runAsGroup: 101
+    fsGroup: 101
+    allowPrivilegeEscalation: false
+    dropCapabilities:
+      - ALL
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  probes:
+    liveness:
+      path: "/healthz"
+      port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+    readiness:
+      path: "/readyz"
+      port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+
+# ── PostgreSQL Database Configuration ───────────────────────
+postgres:
+  image:
+    repository: "postgres"
+    tag: "17-alpine"
+    pullPolicy: "IfNotPresent"
+  strategy:
+    type: "Recreate"
+  service:
+    name: "postgres"
+    type: "ClusterIP"
+    port: 5432
+    targetPort: 5432
+  config:
+    dbName: "taskflow"
+  pgdata: "/var/lib/postgresql/data/pgdata"
+  persistence:
+    enabled: true
+    # If existingClaim is provided (non-empty), Helm skips PVC creation
+    # and mounts the specified pre-existing claim directly.
+    # Leave existingClaim empty ("") to have Helm create or manage the PVC via claimName.
+    existingClaim: ""
+    claimName: "taskflow-postgres-pvc"
+    storageClass: "standard"
+    accessMode: "ReadWriteOnce"
+    size: "1Gi"
+    resourcePolicy: "keep"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  probes:
+    liveness:
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+
+# ── Gateway API Configuration ───────────────────────────────
+gateway:
+  enabled: true
+  gatewayClassName: "traefik-gateway-class"
+  name: "taskflow-gateway"
+  port: 80
+  protocol: "HTTP"
+  httpRoute:
+    enabled: true
+    name: "taskflow-frontend-route"
+    path: "/"
+    pathType: "PathPrefix"

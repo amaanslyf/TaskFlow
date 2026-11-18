@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.postgres.service.name | default "postgres" }}
+  labels:
+    {{- include "taskflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  replicas: 1
+  strategy:
+    type: {{ .Values.postgres.strategy.type | default "Recreate" }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        {{- include "taskflow.labels" . | nindent 8 }}
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+    spec:
+      containers:
+        - name: postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.postgres.service.port | default 5432 }}
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.existingSecret | default "taskflow-secrets" | quote }}
+                  key: {{ .Values.secret.keys.postgresDb | default "POSTGRES_DB" | quote }}
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.existingSecret | default "taskflow-secrets" | quote }}
+                  key: {{ .Values.secret.keys.postgresUser | default "POSTGRES_USER" | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.existingSecret | default "taskflow-secrets" | quote }}
+                  key: {{ .Values.secret.keys.postgresPassword | default "POSTGRES_PASSWORD" | quote }}
+            - name: PGDATA
+              value: {{ .Values.postgres.pgdata | default "/var/lib/postgresql/data/pgdata" | quote }}
+          volumeMounts:
+            {{- if .Values.postgres.persistence.enabled }}
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+            {{- end }}
+            - name: postgres-init-script
+              mountPath: /docker-entrypoint-initdb.d
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: {{ .Values.postgres.probes.liveness.initialDelaySeconds | default 15 }}
+            periodSeconds: {{ .Values.postgres.probes.liveness.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.postgres.probes.liveness.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.postgres.probes.liveness.failureThreshold | default 3 }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: {{ .Values.postgres.probes.readiness.initialDelaySeconds | default 5 }}
+            periodSeconds: {{ .Values.postgres.probes.readiness.periodSeconds | default 5 }}
+            timeoutSeconds: {{ .Values.postgres.probes.readiness.timeoutSeconds | default 3 }}
+            failureThreshold: {{ .Values.postgres.probes.readiness.failureThreshold | default 3 }}
+      volumes:
+        {{- if .Values.postgres.persistence.enabled }}
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: {{ .Values.postgres.persistence.claimName | default "taskflow-postgres-pvc" }}
+        {{- end }}
+        - name: postgres-init-script
+          configMap:
+            name: {{ include "taskflow.fullname" . }}-postgres-init

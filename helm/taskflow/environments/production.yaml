@@ -1,0 +1,43 @@
+# ============================================================
+# TaskFlow — Production Environment Values
+# ============================================================
+frontend:
+  replicaCount: 3
+  image:
+    pullPolicy: "Always"
+  resources:
+    requests:
+      cpu: 150m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+backend:
+  replicaCount: 3
+  image:
+    pullPolicy: "Always"
+  config:
+    port: "8080"
+    frontendOrigin: "https://taskflow.example.com"
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+secret:
+  existingSecret: "taskflow-prod-secrets"
+
+postgres:
+  persistence:
+    enabled: true
+    existingClaim: ""
+    claimName: "taskflow-prod-postgres-pvc"
+    size: "20Gi"
+    storageClass: "standard"
+
+gateway:
+  enabled: true

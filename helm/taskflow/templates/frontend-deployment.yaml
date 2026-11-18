@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.frontend.service.name | default "frontend" }}
+  labels:
+    {{- include "taskflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "taskflow.labels" . | nindent 8 }}
+        app.kubernetes.io/name: frontend
+        app.kubernetes.io/component: ui
+    spec:
+      containers:
+        - name: frontend
+          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.frontend.service.port | default 80 }}
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.frontend.probes.liveness.path | default "/" }}
+              port: {{ .Values.frontend.service.port | default 80 }}
+            initialDelaySeconds: {{ .Values.frontend.probes.liveness.initialDelaySeconds | default 5 }}
+            periodSeconds: {{ .Values.frontend.probes.liveness.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.frontend.probes.liveness.timeoutSeconds | default 3 }}
+            failureThreshold: {{ .Values.frontend.probes.liveness.failureThreshold | default 3 }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.frontend.probes.readiness.path | default "/" }}
+              port: {{ .Values.frontend.service.port | default 80 }}
+            initialDelaySeconds: {{ .Values.frontend.probes.readiness.initialDelaySeconds | default 5 }}
+            periodSeconds: {{ .Values.frontend.probes.readiness.periodSeconds | default 5 }}
+            timeoutSeconds: {{ .Values.frontend.probes.readiness.timeoutSeconds | default 3 }}
+            failureThreshold: {{ .Values.frontend.probes.readiness.failureThreshold | default 3 }}

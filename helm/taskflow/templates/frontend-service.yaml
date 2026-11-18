@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.frontend.service.name | default "frontend" }}
+  labels:
+    {{- include "taskflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui
+spec:
+  type: {{ .Values.frontend.service.type | default "ClusterIP" }}
+  selector:
+    app.kubernetes.io/name: frontend
+  ports:
+    - name: http
+      port: {{ .Values.frontend.service.port | default 80 }}
+      targetPort: {{ .Values.frontend.service.targetPort | default 80 }}

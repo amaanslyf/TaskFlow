@@ -1,0 +1,22 @@
+{{- if and .Values.postgres.persistence.enabled (not .Values.postgres.persistence.existingClaim) -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.postgres.persistence.claimName | default "taskflow-postgres-pvc" }}
+  labels:
+    {{- include "taskflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+  annotations:
+    {{- if .Values.postgres.persistence.resourcePolicy }}
+    helm.sh/resource-policy: {{ .Values.postgres.persistence.resourcePolicy | quote }}
+    {{- end }}
+spec:
+  accessModes:
+    - {{ .Values.postgres.persistence.accessMode | default "ReadWriteOnce" }}
+  {{- if .Values.postgres.persistence.storageClass }}
+  storageClassName: {{ .Values.postgres.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.postgres.persistence.size | default "1Gi" }}
+{{- end }}

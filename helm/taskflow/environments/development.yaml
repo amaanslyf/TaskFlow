@@ -1,0 +1,39 @@
+# ============================================================
+# TaskFlow — Development Environment Values
+# ============================================================
+frontend:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 150m
+      memory: 64Mi
+
+backend:
+  replicaCount: 1
+  config:
+    port: "8080"
+    frontendOrigin: "http://localhost:3000"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+secret:
+  existingSecret: "taskflow-secrets"
+
+postgres:
+  persistence:
+    enabled: true
+    existingClaim: ""
+    claimName: "taskflow-postgres-pvc"
+    size: "1Gi"
+    storageClass: "standard"
+
+gateway:
+  enabled: true

@@ -1,0 +1,19 @@
+apiVersion: v2
+name: taskflow
+description: Production-grade Helm chart for TaskFlow full-stack application (React SPA, Go REST API, PostgreSQL 17, and Traefik Gateway API).
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+icon: https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/app-128.png
+keywords:
+  - taskflow
+  - react
+  - golang
+  - postgresql
+  - gateway-api
+  - traefik
+home: https://github.com/amaanslyf/TaskFlow
+sources:
+  - https://github.com/amaanslyf/TaskFlow
+maintainers:
+  - name: TaskFlow DevOps Team

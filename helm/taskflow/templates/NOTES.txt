@@ -1,0 +1,39 @@
+============================================================
+TaskFlow Helm Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Chart Version: {{ .Chart.Version }}
+============================================================
+
+Thank you for deploying TaskFlow!
+
+1. Check application Pod status:
+   kubectl get pods,pvc,svc -n {{ .Release.Namespace }} -o wide
+
+2. Access TaskFlow via Traefik Gateway API:
+   {{- if .Values.gateway.enabled }}
+   Port-forward the Traefik Gateway proxy (if not using host Port 80 directly):
+     kubectl port-forward svc/traefik 8088:80 -n traefik-system
+   
+   Open your browser and navigate to:
+     http://localhost:8088
+   {{- else }}
+   Gateway is disabled. You can access the Frontend service directly:
+     kubectl port-forward svc/{{ .Values.frontend.service.name }} 3001:80 -n {{ .Release.Namespace }}
+   
+   Open your browser and navigate to:
+     http://localhost:3001
+   {{- end }}
+
+3. Verify application endpoints:
+   - Web Frontend:
+     curl -i http://localhost/
+   - API Health:
+     curl -i http://localhost/healthz
+   - Tasks API (Collection):
+     curl -i http://localhost/api/v1/tasks
+
+4. Database Persistence & Secret Notice:
+   - PostgreSQL uses PVC: '{{ .Values.postgres.persistence.existingClaim | default .Values.postgres.persistence.claimName }}'
+   - PVC retention policy: '{{ .Values.postgres.persistence.resourcePolicy | default "none" }}'
+   - Application secrets are loaded from existing Secret: '{{ .Values.secret.existingSecret }}'
+============================================================

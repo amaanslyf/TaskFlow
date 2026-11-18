@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "taskflow.fullname" . }}-config
+  labels:
+    {{- include "taskflow.labels" . | nindent 4 }}
+data:
+  PORT: {{ .Values.backend.config.port | default "8080" | quote }}
+  FRONTEND_ORIGIN: {{ .Values.backend.config.frontendOrigin | default "http://localhost:3000" | quote }}
+  POSTGRES_HOST: {{ .Values.postgres.service.name | default "postgres" | quote }}
+  POSTGRES_PORT: {{ .Values.postgres.service.port | default 5432 | quote }}
+  POSTGRES_DB: {{ .Values.postgres.config.dbName | default "taskflow" | quote }}

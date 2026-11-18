@@ -1,0 +1,39 @@
+# ============================================================
+# TaskFlow — Staging Environment Values
+# ============================================================
+frontend:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+backend:
+  replicaCount: 2
+  config:
+    port: "8080"
+    frontendOrigin: "https://staging.taskflow.example.com"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+secret:
+  existingSecret: "taskflow-staging-secrets"
+
+postgres:
+  persistence:
+    enabled: true
+    existingClaim: ""
+    claimName: "taskflow-staging-postgres-pvc"
+    size: "5Gi"
+    storageClass: "standard"
+
+gateway:
+  enabled: true
